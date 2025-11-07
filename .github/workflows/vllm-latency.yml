@@ -17,7 +17,6 @@ jobs:
     # Orchestrates a remote Lambda Cloud GPU instance
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
     env:
       MODEL_ID: meta-llama/Llama-3.1-8B-Instruct
       TP_SIZE: 2
@@ -31,8 +30,8 @@ jobs:
 
       # Lambda Cloud API configuration (set repo Variables where possible)
       LL_API_URL: https://cloud.lambdalabs.com/api/v1
-      LL_REGION: ${{ vars.LL_REGION }}            # e.g. us-east-1
-      LL_INSTANCE_TYPE: ${{ vars.LL_INSTANCE_TYPE }}  # e.g. gpu_2x_a10 or gpu_2x_a100_sxm
+      LL_REGION: ${{ vars.LL_REGION }}            # e.g. us-south-1
+      LL_INSTANCE_TYPE: ${{ vars.LL_INSTANCE_TYPE }}  # e.g. gpu_2x_a10 or gpu_1x_a6000
       LL_SSH_KEY_NAME: ${{ vars.LL_SSH_KEY_NAME }}    # name of an SSH key already uploaded to Lambda Cloud
 
     steps:
@@ -42,6 +41,23 @@ jobs:
         run: mkdir -p results
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
+      
+      - name: Determine GPU configuration
+        id: gpu_config
+        shell: bash
+        run: |
+          # Extract GPU count from instance type (e.g., gpu_2x_a10 -> 2, gpu_1x_a6000 -> 1)
+          GPU_COUNT=$(echo "$LL_INSTANCE_TYPE" | grep -oP '\d+(?=x)' || echo "1")
+          echo "gpu_count=$GPU_COUNT" | tee -a "$GITHUB_OUTPUT"
+          
+          if [[ "$GPU_COUNT" == "1" ]]; then
+            echo "tp_size=1" | tee -a "$GITHUB_OUTPUT"
+            echo "cuda_devices=0" | tee -a "$GITHUB_OUTPUT"
+          else
+            echo "tp_size=$TP_SIZE" | tee -a "$GITHUB_OUTPUT"
+            echo "cuda_devices=$CUDA_VISIBLE_DEVICES" | tee -a "$GITHUB_OUTPUT"
+          fi
+
       - name: Launch Lambda Cloud instance
         id: launch
         env:
@@ -58,16 +74,16 @@ jobs:
             exit 1
           fi
 
-          # Create instance (1x) with the specified SSH key
+          # Create instance (1x) with the specified SSH key using the correct endpoint
           CREATE_RESP=$(curl -fsS -X POST \
             -H "Authorization: Bearer ${LAMBDA_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$(jq -n --arg region "$LL_REGION" --arg type "$LL_INSTANCE_TYPE" --arg key "$LL_SSH_KEY_NAME" '{region_name:$region, instance_type_name:$type, ssh_key_names:[$key], quantity:1}')" \
-            "$LL_API_URL/instances")
+            "$LL_API_URL/instance-operations/launch")
           echo "$CREATE_RESP" > create_instance.json
 
           # Try common response shapes to find the instance ID
-          INSTANCE_ID=$(jq -r '(.data.instances[0].id // .data.instance_ids[0] // .instance_ids[0] // .data[0].id // .instances[0].id // empty)' create_instance.json)
+          INSTANCE_ID=$(jq -r '(.data.instance_ids[0] // .instance_ids[0] // .data.instances[0].id // .data[0].id // .instances[0].id // empty)' create_instance.json)
           if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "null" ]]; then
             echo "Failed to parse instance ID from API response:" >&2
             cat create_instance.json >&2
@@ -86,8 +102,8 @@ jobs:
           for i in {1..60}; do
             RESP=$(curl -fsS -H "Authorization: Bearer ${LAMBDA_API_KEY}" "$LL_API_URL/instances/$ID" || true)
             echo "$RESP" > instance_${ID}.json
-            STATE=$(jq -r '(.data.instance.status // .data.instance.state // .data.status // .status // "")' instance_${ID}.json)
-            IP=$(jq -r '(.data.instance.ip // .data.instance.network.ip_addresses[0].ip_address // .data.instance.ip_address // .data.ip_address // .data.instance.public_ip // "")' instance_${ID}.json)
+            STATE=$(jq -r '(.data.status // .data.instance.status // .data.instance.state // .status // "")' instance_${ID}.json)
+            IP=$(jq -r '(.data.ip // .data.instance.ip // .data.instance.network.ip_addresses[0].ip_address // .data.instance.ip_address // .data.ip_address // .data.instance.public_ip // "")' instance_${ID}.json)
             echo "state=$STATE ip=$IP"
             if [[ "$STATE" == "running" || "$STATE" == "active" ]] && [[ -n "$IP" && "$IP" != "null" ]]; then
               echo "instance_ip=$IP" | tee -a "$GITHUB_OUTPUT"
@@ -120,6 +136,8 @@ jobs:
       - name: Run latency bench on Lambda instance
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          ACTUAL_TP_SIZE: ${{ steps.gpu_config.outputs.tp_size }}
+          ACTUAL_CUDA_DEVICES: ${{ steps.gpu_config.outputs.cuda_devices }}
         shell: bash
         run: |
           set -euo pipefail
@@ -154,12 +172,12 @@ jobs:
           PY
 
           export HUGGING_FACE_HUB_TOKEN='${HF_TOKEN}'
-          export CUDA_VISIBLE_DEVICES='${CUDA_VISIBLE_DEVICES}'
+          export CUDA_VISIBLE_DEVICES='${ACTUAL_CUDA_DEVICES}'
 
           for B in ${BS_LIST}; do
             vllm bench latency \
               --model "${MODEL_ID}" \
-              --tensor-parallel-size "${TP_SIZE}" \
+              --tensor-parallel-size "${ACTUAL_TP_SIZE}" \
               --batch-size "$B" \
               --input-len "${INPUT_LEN}" \
               --output-len "${OUTPUT_LEN}" \
@@ -186,7 +204,10 @@ jobs:
           set -euo pipefail
           ID=${{ steps.launch.outputs.instance_id }}
           # Attempt termination; ignore failures to avoid masking prior errors
-          curl -fsS -X DELETE -H "Authorization: Bearer ${LAMBDA_API_KEY}" "$LL_API_URL/instances/$ID" || true
+          curl -fsS -X POST -H "Authorization: Bearer ${LAMBDA_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"instance_ids\":[\"$ID\"]}" \
+            "$LL_API_URL/instance-operations/terminate" || true
 
       - name: Upload artifacts (raw JSON + env)
         uses: actions/upload-artifact@v4
@@ -215,7 +236,7 @@ jobs:
             p95 = get("p95_latency","p95_latency_s","p95")
             to_ms=lambda x: (x*1000.0 if x is not None and x<50 else x)  # crude: if value looks like seconds, convert
             rows.append((bs, to_ms(avg), to_ms(p50), to_ms(p95)))
-          print("## vLLM Latency — Llama 8B (TP=2)")
+          print("## vLLM Latency — Llama 8B (TP=${{ steps.gpu_config.outputs.tp_size }})")
           print()
           print("| Batch | Avg (ms) | P50 (ms) | P95 (ms) |")
           print("|---:|---:|---:|---:|")
