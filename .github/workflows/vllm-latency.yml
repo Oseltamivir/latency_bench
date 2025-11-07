@@ -142,37 +142,42 @@ jobs:
         run: |
           set -euo pipefail
           REMOTE=ubuntu@${{ steps.wait.outputs.instance_ip }}
-          # Send a one-shot script to the instance and execute it
-          ssh -i ~/.ssh/lambda_key -o StrictHostKeyChecking=no "$REMOTE" bash -s <<'REMOTE_SCRIPT'
+
+          # Pass env into the remote shell (doesn't happen automatically with SSH)
+          ssh -i ~/.ssh/lambda_key -o StrictHostKeyChecking=no "$REMOTE" \
+            "export PATH=\$HOME/.local/bin:\$PATH; \
+             export HUGGING_FACE_HUB_TOKEN='${HF_TOKEN}'; \
+             export CUDA_VISIBLE_DEVICES='${ACTUAL_CUDA_DEVICES}'; \
+             export ACTUAL_TP_SIZE='${ACTUAL_TP_SIZE}'; \
+             export MODEL_ID='${MODEL_ID}'; \
+             export INPUT_LEN='${INPUT_LEN}'; \
+             export OUTPUT_LEN='${OUTPUT_LEN}'; \
+             export NUM_ITERS='${NUM_ITERS}'; \
+             export NUM_WARMUP='${NUM_WARMUP}'; \
+             export BS_LIST='${BS_LIST}'; \
+             bash -s" <<'REMOTE_SCRIPT'
           set -euo pipefail
           mkdir -p ~/results
-          # Ensure Python and pip are ready; Lambda Cloud images ship with Python 3.10 on Ubuntu 22.04
-          python3 -m pip install --upgrade pip
-          python3 -m pip install "vllm[bench]>=0.10.0" hf_transfer
 
-          # Capture env (GPU, Torch, vLLM) on the remote machine
+          # Faster HF downloads + ensure CLI is on PATH
+          export HF_HUB_ENABLE_HF_TRANSFER=1
+          export PATH="$HOME/.local/bin:$PATH"
+
+          python3 -m pip install --upgrade --user pip
+          python3 -m pip install --user "vllm[bench]>=0.10.0" hf_transfer
+
           nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader > ~/results/gpu.txt || true
           python3 - <<'PY'
           import json, platform, sys, importlib
-          info = {
-            "python": sys.version.split()[0],
-            "torch": None,
-            "vllm": None,
-            "platform": platform.platform(),
-          }
-          try:
-            info["torch"] = importlib.import_module("torch").__version__
-          except Exception:
-            pass
-          try:
-            info["vllm"] = importlib.import_module("vllm").__version__
-          except Exception:
-            pass
+          info={"python":sys.version.split()[0],"torch":None,"vllm":None,"platform":platform.platform()}
+          for m in ("torch","vllm"):
+              try: info[m]=importlib.import_module(m).__version__
+              except Exception: pass
           open("/home/ubuntu/results/env.json","w").write(json.dumps(info, indent=2))
           PY
 
-          export HUGGING_FACE_HUB_TOKEN='${HF_TOKEN}'
-          export CUDA_VISIBLE_DEVICES='${ACTUAL_CUDA_DEVICES}'
+          # Safe default even with `set -u` if BS_LIST wasn't passed
+          BS_LIST="${BS_LIST:-1 2 4 8}"
 
           for B in ${BS_LIST}; do
             vllm bench latency \
