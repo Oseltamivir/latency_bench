@@ -2,11 +2,12 @@ name: vLLM Llama 8B Latency (TP2)
 
 on:
   schedule:
-    - cron: "0 * * * *" # hourly (UTC)
+    - cron: "0 * * * *"  # hourly (UTC)
   workflow_dispatch:
 
 permissions:
-  contents: write  # to commit docs/ chart + history
+  contents: write   # commit docs/ + history for Pages
+  actions: read
 
 concurrency:
   group: vllm-latency
@@ -14,7 +15,6 @@ concurrency:
 
 jobs:
   bench:
-    # Orchestrates a remote Lambda Cloud GPU instance
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -25,14 +25,11 @@ jobs:
       NUM_ITERS: 5
       NUM_WARMUP: 2
       CUDA_VISIBLE_DEVICES: 0,1
-      # Batch sizes to run on the remote instance (replaces the matrix)
-      BS_LIST: "1"
-
-      # Lambda Cloud API configuration (set repo Variables where possible)
+      BS_LIST: "1 2 4 8"                  # ← run all four batch sizes
       LL_API_URL: https://cloud.lambdalabs.com/api/v1
-      LL_REGION: ${{ vars.LL_REGION }}            # e.g. us-south-1
-      LL_INSTANCE_TYPE: ${{ vars.LL_INSTANCE_TYPE }}  # e.g. gpu_2x_a10 or gpu_1x_a6000
-      LL_SSH_KEY_NAME: ${{ vars.LL_SSH_KEY_NAME }}    # name of an SSH key already uploaded to Lambda Cloud
+      LL_REGION: ${{ vars.LL_REGION }}
+      LL_INSTANCE_TYPE: ${{ vars.LL_INSTANCE_TYPE }}
+      LL_SSH_KEY_NAME: ${{ vars.LL_SSH_KEY_NAME }}
       PAGES_BRANCH: gh-pages
 
     steps:
@@ -40,22 +37,21 @@ jobs:
 
       - name: Ensure results dir
         run: mkdir -p results
+
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
-      
+
       - name: Determine GPU configuration
         id: gpu_config
         shell: bash
         run: |
-          # Extract GPU count from instance type (e.g., gpu_2x_a10 -> 2, gpu_1x_a6000 -> 1)
           GPU_COUNT=$(echo "$LL_INSTANCE_TYPE" | grep -oP '\d+(?=x)' || echo "1")
           echo "gpu_count=$GPU_COUNT" | tee -a "$GITHUB_OUTPUT"
-          
           if [[ "$GPU_COUNT" == "1" ]]; then
-            echo "tp_size=1" | tee -a "$GITHUB_OUTPUT"
-            echo "cuda_devices=0" | tee -a "$GITHUB_OUTPUT"
+            echo "tp_size=1"         | tee -a "$GITHUB_OUTPUT"
+            echo "cuda_devices=0"    | tee -a "$GITHUB_OUTPUT"
           else
-            echo "tp_size=$TP_SIZE" | tee -a "$GITHUB_OUTPUT"
+            echo "tp_size=$TP_SIZE"  | tee -a "$GITHUB_OUTPUT"
             echo "cuda_devices=$CUDA_VISIBLE_DEVICES" | tee -a "$GITHUB_OUTPUT"
           fi
 
@@ -66,16 +62,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${LL_REGION:-}" || -z "${LL_INSTANCE_TYPE:-}" || -z "${LL_SSH_KEY_NAME:-}" ]]; then
-            echo "LL_REGION, LL_INSTANCE_TYPE, and LL_SSH_KEY_NAME must be set via repository Variables." >&2
-            exit 1
-          fi
-          if [[ -z "${LAMBDA_API_KEY:-}" ]]; then
-            echo "secrets.LAMBDA_API_KEY must be set." >&2
-            exit 1
-          fi
+          [[ -n "${LL_REGION:-}" && -n "${LL_INSTANCE_TYPE:-}" && -n "${LL_SSH_KEY_NAME:-}" ]] || { echo "Missing Lambda Cloud repo vars."; exit 1; }
+          [[ -n "${LAMBDA_API_KEY:-}" ]] || { echo "secrets.LAMBDA_API_KEY must be set."; exit 1; }
 
-          # Create instance (1x) with the specified SSH key using the correct endpoint
           CREATE_RESP=$(curl -fsS -X POST \
             -H "Authorization: Bearer ${LAMBDA_API_KEY}" \
             -H "Content-Type: application/json" \
@@ -83,13 +72,8 @@ jobs:
             "$LL_API_URL/instance-operations/launch")
           echo "$CREATE_RESP" > create_instance.json
 
-          # Try common response shapes to find the instance ID
           INSTANCE_ID=$(jq -r '(.data.instance_ids[0] // .instance_ids[0] // .data.instances[0].id // .data[0].id // .instances[0].id // empty)' create_instance.json)
-          if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "null" ]]; then
-            echo "Failed to parse instance ID from API response:" >&2
-            cat create_instance.json >&2
-            exit 1
-          fi
+          [[ -n "$INSTANCE_ID" && "$INSTANCE_ID" != "null" ]] || { echo "Failed to parse instance ID"; cat create_instance.json; exit 1; }
           echo "instance_id=$INSTANCE_ID" | tee -a "$GITHUB_OUTPUT"
 
       - name: Wait for instance to be running and get IP
@@ -106,16 +90,13 @@ jobs:
             STATE=$(jq -r '(.data.status // .data.instance.status // .data.instance.state // .status // "")' instance_${ID}.json)
             IP=$(jq -r '(.data.ip // .data.instance.ip // .data.instance.network.ip_addresses[0].ip_address // .data.instance.ip_address // .data.ip_address // .data.instance.public_ip // "")' instance_${ID}.json)
             echo "state=$STATE ip=$IP"
-            if [[ "$STATE" == "running" || "$STATE" == "active" ]] && [[ -n "$IP" && "$IP" != "null" ]]; then
+            if [[ "$STATE" =~ ^(running|active)$ ]] && [[ -n "$IP" && "$IP" != "null" ]]; then
               echo "instance_ip=$IP" | tee -a "$GITHUB_OUTPUT"
               break
             fi
             sleep 10
           done
-          if [[ -z "${IP:-}" || "$IP" == "null" ]]; then
-            echo "Timed out waiting for instance IP" >&2
-            exit 1
-          fi
+          [[ -n "${IP:-}" && "$IP" != "null" ]] || { echo "Timed out waiting for instance IP"; exit 1; }
 
       - name: Install SSH key
         id: sshkey
@@ -124,14 +105,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${LL_SSH_PRIVATE_KEY:-}" ]]; then
-            echo "secrets.LL_SSH_PRIVATE_KEY must contain the private key matching LL_SSH_KEY_NAME." >&2
-            exit 1
-          fi
+          [[ -n "${LL_SSH_PRIVATE_KEY:-}" ]] || { echo "secrets.LL_SSH_PRIVATE_KEY must be set."; exit 1; }
           mkdir -p ~/.ssh
           echo "$LL_SSH_PRIVATE_KEY" > ~/.ssh/lambda_key
           chmod 600 ~/.ssh/lambda_key
-          # Pre-populate known_hosts to avoid StrictHostKey prompt
           ssh-keyscan -H ${{ steps.wait.outputs.instance_ip }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Run latency bench on Lambda instance
@@ -144,7 +121,6 @@ jobs:
           set -euo pipefail
           REMOTE=ubuntu@${{ steps.wait.outputs.instance_ip }}
 
-          # Pass env into the remote shell (doesn't happen automatically with SSH)
           ssh -i ~/.ssh/lambda_key -o StrictHostKeyChecking=no "$REMOTE" \
             "export PATH=\$HOME/.local/bin:\$PATH; \
              export HUGGING_FACE_HUB_TOKEN='${HF_TOKEN}'; \
@@ -159,46 +135,41 @@ jobs:
              bash -s" <<'REMOTE_SCRIPT'
           set -euo pipefail
           mkdir -p ~/results
-          cd ~/results 
+          cd ~/results
 
-          # 1) Clean, isolated env (no system-site packages)
+          # Env
           python3 -m venv ~/vllm-venv
           source ~/vllm-venv/bin/activate
           python -m pip install --upgrade pip
-
-          # 2) Make HF downloads faster (optional)
           export HF_HUB_ENABLE_HF_TRANSFER=1
-
-          # 3) Tell transformers not to even look for TF/JAX
           export TRANSFORMERS_NO_TF=1
           export TRANSFORMERS_NO_FLAX=1
-          # (extra belt-and-suspenders; not strictly needed in a venv)
           export PYTHONNOUSERSITE=1
-
-          # 4) Install deps (NO --user)
           pip install "vllm[bench]>=0.10.0" hf_transfer
 
-          # 5) Capture env info
+          # Record versions + GPU
+          nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | tee gpu.txt
           python - <<'PY'
           import json, platform, sys, importlib
           info={"python":sys.version.split()[0],"torch":None,"vllm":None,"platform":platform.platform()}
           for m in ("torch","vllm"):
               try: info[m]=importlib.import_module(m).__version__
               except Exception: pass
-          open("/home/ubuntu/results/env.json","w").write(json.dumps(info, indent=2))
+          open("env.json","w").write(json.dumps(info, indent=2))
           PY
 
-          # 6) Bench (use the venv's vllm)
-          BS_LIST="${BS_LIST:-1 2 4}"
+          # Bench — write a JSON per batch size (+ keep stdout logs)
           for B in ${BS_LIST}; do
+            echo "==> bench bs=${B}"
             vllm bench latency \
               --model "${MODEL_ID}" \
               --tensor-parallel-size "${ACTUAL_TP_SIZE}" \
-              --batch-size "$B" \
+              --batch-size "${B}" \
               --input-len "${INPUT_LEN}" \
               --output-len "${OUTPUT_LEN}" \
               --num-iters "${NUM_ITERS}" \
-              --num-iters-warmup "${NUM_WARMUP}"
+              --num-iters-warmup "${NUM_WARMUP}" \
+              --output-json "latency_bs${B}.json" | tee "latency_bs${B}.log"
           done
           REMOTE_SCRIPT
 
@@ -207,7 +178,8 @@ jobs:
         run: |
           set -euo pipefail
           REMOTE=ubuntu@${{ steps.wait.outputs.instance_ip }}
-          scp -i ~/.ssh/lambda_key -o StrictHostKeyChecking=no -r "$REMOTE:results/" ./
+          scp -i ~/.ssh/lambda_key -o StrictHostKeyChecking=no -r "$REMOTE:results/" ./results
+          echo "Downloaded files:"; ls -lah results; echo; find results -maxdepth 1 -type f -print
 
       - name: Terminate Lambda Cloud instance
         if: always()
@@ -217,17 +189,21 @@ jobs:
         run: |
           set -euo pipefail
           ID=${{ steps.launch.outputs.instance_id }}
-          # Attempt termination; ignore failures to avoid masking prior errors
           curl -fsS -X POST -H "Authorization: Bearer ${LAMBDA_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "{\"instance_ids\":[\"$ID\"]}" \
             "$LL_API_URL/instance-operations/terminate" || true
 
-      - name: Upload artifacts (raw JSON + env)
+      - name: Upload artifacts (JSON + logs + env)
         uses: actions/upload-artifact@v4
         with:
           name: vllm-latency-${{ github.run_id }}
-          path: results/**
+          path: |
+            results/latency_bs*.json
+            results/latency_bs*.log
+            results/env.json
+            results/gpu.txt
+          if-no-files-found: error
 
       - name: Add markdown table to Job Summary
         shell: bash
@@ -235,12 +211,10 @@ jobs:
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import glob, json, os
           files = sorted(glob.glob("results/latency_bs*.json"))
-          # Collect rows
           rows=[]
           for f in files:
             d=json.load(open(f))
             bs=int(os.path.basename(f).split("bs")[1].split(".")[0])
-            # The CLI emits avg + percentiles; seconds vs ms can vary—normalize to ms if needed.
             def get(*c):
               for k in c:
                 if k in d: return d[k]
@@ -248,7 +222,7 @@ jobs:
             avg = get("avg_latency","avg_latency_s","avg_latency_seconds")
             p50 = get("p50_latency","p50_latency_s","p50")
             p95 = get("p95_latency","p95_latency_s","p95")
-            to_ms=lambda x: (x*1000.0 if x is not None and x<50 else x)  # crude: if value looks like seconds, convert
+            to_ms=lambda x: (x*1000.0 if (x is not None and x<50) else x)  # crude sec→ms
             rows.append((bs, to_ms(avg), to_ms(p50), to_ms(p95)))
           print("## vLLM Latency — Llama 8B (TP=${{ steps.gpu_config.outputs.tp_size }})")
           print()
@@ -262,7 +236,6 @@ jobs:
       - name: Update GitHub Pages data & chart
         run: |
           set -euo pipefail
-          # Preserve results before branch switch
           cp -r results _results_tmp
 
           git fetch origin $PAGES_BRANCH || true
@@ -295,27 +268,19 @@ jobs:
 
           if [ ! -f docs/index.html ]; then
             cat > docs/index.html <<'HTML'
-          <!doctype html>
-          <html>
-          <head>
-            <meta charset="utf-8"/>
-            <meta name="viewport" content="width=device-width, initial-scale=1"/>
+          <!doctype html><html><head>
+            <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
             <title>vLLM Latency — Llama 8B (TP=2)</title>
             <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
             <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
             <style>
               :root { --fg:#0f172a; --muted:#475569; --card:#fff; --bg:#f8fafc; }
-              *{box-sizing:border-box}
-              body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+              *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
               .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
               header{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:center;margin-bottom:12px}
-              a{color:#2563eb;text-decoration:none}
-              canvas{background:var(--card);border-radius:16px;box-shadow:0 10px 30px rgba(2,6,23,.06);padding:16px}
-              .muted{color:var(--muted)}
-              code{background:#e2e8f0;padding:2px 6px;border-radius:6px}
-            </style>
-          </head>
-          <body>
+              a{color:#2563eb;text-decoration:none} canvas{background:var(--card);border-radius:16px;box-shadow:0 10px 30px rgba(2,6,23,.06);padding:16px}
+              .muted{color:var(--muted)} code{background:#e2e8f0;padding:2px 6px;border-radius:6px}
+            </style></head><body>
             <div class="wrap">
               <header>
                 <h1>vLLM Latency — Llama 8B (TP=2)</h1>
@@ -327,37 +292,28 @@ jobs:
             <script>
               async function main(){
                 const resp = await fetch('./data/latency_history.json', {cache:'no-store'});
-                const hist = await resp.json();
-                const by = {};
+                const hist = await resp.json(); const by = {};
                 for(const r of hist){
-                  const m=r.metrics;
-                  const t=new Date(r.ts);
-                  const bs=r.batch_size;
+                  const m=r.metrics; const t=new Date(r.ts); const bs=r.batch_size;
                   const avg=(m.avg_latency ?? m.avg_latency_s ?? m.avg_latency_seconds);
                   const p95=(m.p95_latency ?? m.p95 ?? m.p95_latency_s);
                   if(avg==null || p95==null) continue;
-                  const toMs = v => (v<50 ? v*1000 : v);
-                  by[bs] = by[bs] || {avg:[], p95:[]};
-                  by[bs].avg.push({x:t, y:toMs(avg)});
-                  by[bs].p95.push({x:t, y:toMs(p95)});
+                  const toMs=v => (v<50 ? v*1000 : v);
+                  (by[bs] ||= {avg:[], p95:[]}).avg.push({x:t,y:toMs(avg)});
+                  by[bs].p95.push({x:t,y:toMs(p95)});
                 }
-                const ds=[];
-                const add=(label,key)=>Object.keys(by).sort((a,b)=>a-b).forEach(bs=>{
+                const ds=[]; const add=(label,key)=>Object.keys(by).sort((a,b)=>a-b).forEach(bs=>{
                   ds.push({label:`${label} (bs=${bs})`, data: by[bs][key], borderWidth:2, fill:false, tension:.2});
                 });
                 add('Avg ms','avg'); add('P95 ms','p95');
-                const ctx=document.getElementById('chart').getContext('2d');
-                new Chart(ctx,{type:'line', data:{datasets:ds}, options:{
-                  parsing:false,
-                  interaction:{mode:'nearest',intersect:false},
-                  scales:{x:{type:'time'}, y:{title:{display:true,text:'Latency (ms)'}}},
-                  plugins:{legend:{position:'bottom'}}
-                }});
-              }
-              main();
-            </script>
-          </body>
-          </html>
+                new Chart(document.getElementById('chart').getContext('2d'),{
+                  type:'line', data:{datasets:ds}, options:{
+                    parsing:false, interaction:{mode:'nearest',intersect:false},
+                    scales:{x:{type:'time'}, y:{title:{display:true,text:'Latency (ms)'}}},
+                    plugins:{legend:{position:'bottom'}}
+                  }});
+              } main();
+            </script></body></html>
           HTML
           fi
 
