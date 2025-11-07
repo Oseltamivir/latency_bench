@@ -12,7 +12,7 @@ on:
 jobs:
   run-latency-bench:
     # Pin to a ref that contains the callable workflow
-    uses: ${{ github.repository }}/.github/workflows/vllm-latency.yml@main
+    uses: .github/workflows/vllm-latency.yml
     with:
       model_id:   ${{ inputs.model_id }}
       input_len:  ${{ inputs.input_len }}
