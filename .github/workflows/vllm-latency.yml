@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      MODEL_ID: meta-llama/Llama-3.1-8B-Instruct
+      MODEL_ID: unsloth/Llama-3.2-1B-Instruct
       TP_SIZE: 2
       INPUT_LEN: 512
       OUTPUT_LEN: 128
@@ -84,6 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           ID=${{ steps.launch.outputs.instance_id }}
+          sleep 180
           for i in {1..60}; do
             RESP=$(curl -fsS -H "Authorization: Bearer ${LAMBDA_API_KEY}" "$LL_API_URL/instances/$ID" || true)
             echo "$RESP" > instance_${ID}.json
