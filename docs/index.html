@@ -4,12 +4,7 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>vLLM Latency — Llama 8B (TP=2)</title>
-
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-  <!-- Boxplot/Violin plugin for Chart.js v4 -->
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-boxplot@4.3.0/build/index.umd.min.js"></script>
-
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <style>
     :root { --fg:#0f172a; --muted:#475569; --card:#fff; --bg:#f8fafc; }
     *{box-sizing:border-box}
@@ -18,8 +13,9 @@
     header{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:center;margin-bottom:12px}
     a{color:#2563eb;text-decoration:none}
     .controls{display:flex;gap:12px;align-items:center;margin:8px 0 16px}
-    canvas{background:var(--card);border-radius:16px;box-shadow:0 10px 30px rgba(2,6,23,.06);padding:16px}
+    .chart-wrap{background:var(--card);border-radius:16px;box-shadow:0 10px 30px rgba(2,6,23,.06);padding:16px}
     .muted{color:var(--muted)}
+    #chart{width:100%;height:480px}
     select{padding:6px 8px;border-radius:8px;border:1px solid #cbd5e1;background:#fff}
   </style>
 </head>
@@ -30,153 +26,95 @@
       <a class="muted" href="./data/latency_history.json">raw JSON</a>
     </header>
     <p class="muted">
-      Each point shows a <strong>distribution</strong> of per-iteration latencies for a run (min–Q1–median–Q3–max);
-      an <em>Avg ms</em> line overlays the trend per batch size.
+      Each point shows a <strong>distribution</strong> of per-iteration latencies for a run; an <em>Avg ms</em> line overlays the trend per batch size.
     </p>
     <div class="controls">
-      <label class="muted">Distribution type:</label>
+      <label class="muted" for="mode">Distribution type:</label>
       <select id="mode">
-        <option value="boxplot" selected>Box & whisker</option>
+        <option value="box" selected>Box & whisker</option>
         <option value="violin">Violin</option>
       </select>
     </div>
-    <canvas id="chart" height="120"></canvas>
+    <div class="chart-wrap"><div id="chart"></div></div>
   </div>
 
   <script>
-    const toMs = v => (v == null ? null : (v < 50 ? v * 1000 : v)); // crude sec→ms
-
-    function quantiles(arr) {
-      if (!arr || !arr.length) return null;
-      const s = [...arr].sort((a,b)=>a-b);
-      const pick = p => s[Math.floor((s.length-1)*p)];
-      const sum = s.reduce((a,b)=>a+b,0);
-      return {
-        min: s[0],
-        q1: pick(0.25),
-        median: pick(0.50),
-        q3: pick(0.75),
-        max: s[s.length-1],
-        mean: sum / s.length,
-        p95: pick(0.95)
-      };
-    }
+    const toMs = v => (v < 50 ? v * 1000 : v);
+    const tsLabel = iso => {
+      const d = new Date(iso);
+      // Nice, stable category label (YYYY-MM-DD HH:MM)
+      const pad = n => String(n).padStart(2,'0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
 
     async function loadHist(){
-      const resp = await fetch('./data/latency_history.json', {cache:'no-store'});
-      return await resp.json();
+      const r = await fetch('./data/latency_history.json', {cache:'no-store'});
+      if (!r.ok) throw new Error('Failed to load latency_history.json');
+      return await r.json();
     }
 
-    function buildDatasets(hist, distType) {
-      // Group by batch_size
-      const by = {};
+    function build(labelsOrdered, hist, mode){
+      // Group runs by batch size
+      const byBS = new Map();
       for (const r of hist) {
-        const t = new Date(r.ts);
         const bs = r.batch_size;
-        const m  = r.metrics || {};
-        const lat = m.latencies || [];           // array of per-iter latencies
-        const avg = m.avg_latency ?? m.avg_latency_s ?? m.avg_latency_seconds ?? null;
-
-        const q = quantiles(lat);
-        if (!q && avg == null) continue;
-
-        (by[bs] ||= {dist: [], avg: []});
-
-        if (q) {
-          // Chart.js boxplot/violin expects {x, y:{min,q1,median,q3,max}} or for violin just raw array
-          if (distType === 'violin') {
-            by[bs].dist.push({ x: t, y: lat.map(toMs) });
-          } else { // boxplot
-            by[bs].dist.push({
-              x: t,
-              y: {
-                min: toMs(q.min), q1: toMs(q.q1), median: toMs(q.median),
-                q3: toMs(q.q3), max: toMs(q.max), mean: toMs(q.mean), p95: toMs(q.p95)
-              }
-            });
-          }
-        }
-        if (avg != null) by[bs].avg.push({ x: t, y: toMs(avg) });
+        const lbl = tsLabel(r.ts);
+        const lats = (r.metrics?.latencies || []).map(toMs);
+        const avg  = toMs(r.metrics?.avg_latency ?? NaN);
+        if (!byBS.has(bs)) byBS.set(bs, { x: [], y: [], xAvg: [], yAvg: [] });
+        // For box/violin, we add one Y per latency sample and repeat the timestamp label
+        for (const v of lats){ byBS.get(bs).x.push(lbl); byBS.get(bs).y.push(v); }
+        if (!Number.isNaN(avg)) { byBS.get(bs).xAvg.push(lbl); byBS.get(bs).yAvg.push(avg); }
       }
 
-      const datasets = [];
-      // Distribution datasets
-      Object.keys(by).sort((a,b)=>+a-+b).forEach(bs => {
-        datasets.push({
-          type: distType,                         // 'boxplot' or 'violin'
-          label: `${distType === 'violin' ? 'Violin' : 'Box'} (bs=${bs})`,
-          data: by[bs].dist,
-          borderWidth: 1,
-          outlierRadius: 0,                       // hide outliers to keep it clean
+      const traces = [];
+      for (const [bs, obj] of byBS.entries()){
+        traces.push({
+          type: mode, name: `bs=${bs}`,
+          x: obj.x, y: obj.y,
+          boxpoints: (mode==='box' ? 'outliers' : false),
+          // Violin looks better with some smoothing
+          ...(mode==='violin' ? { points: 'outliers', spanmode: 'hard' } : {})
         });
-      });
-      // Avg line datasets
-      Object.keys(by).sort((a,b)=>+a-+b).forEach(bs => {
-        datasets.push({
-          type: 'line',
-          label: `Avg ms (bs=${bs})`,
-          data: by[bs].avg,
-          borderWidth: 2,
-          fill: false,
-          tension: .2
+        traces.push({
+          type: 'scatter', mode: 'lines+markers',
+          name: `Avg ms (bs=${bs})`,
+          x: obj.xAvg, y: obj.yAvg,
+          hovertemplate: 'Avg: %{y:.1f} ms<br>%{x}<extra></extra>',
         });
-      });
+      }
 
-      return datasets;
+      // Ensure timestamps appear in chronological order on a categorical axis
+      const labelsSet = new Set(labelsOrdered);
+      const categoryArray = Array.from(labelsSet).sort(); // ISO-like strings sort chronologically
+
+      const layout = {
+        margin: {l:60,r:20,t:10,b:60},
+        xaxis: { title:'Run timestamp', type:'category', categoryorder:'array', categoryarray: categoryArray, tickangle:-20 },
+        yaxis: { title:'Latency (ms)', rangemode:'auto' },
+        legend: { orientation:'h', x:0, y:1.1 },
+        boxmode: 'group',
+        violinmode: 'group',
+        hovermode: 'x unified',
+      };
+      return { traces, layout };
     }
 
-    function makeChart(datasets) {
-      const ctx = document.getElementById('chart').getContext('2d');
-      return new Chart(ctx, {
-        type: 'line', // base type (mixed datasets override this)
-        data: { datasets },
-        options: {
-          parsing: false,
-          interaction: { mode: 'nearest', intersect: false },
-          scales: {
-            x: { type: 'time' },
-            y: { title: { display: true, text: 'Latency (ms)' } }
-          },
-          plugins: {
-            legend: { position: 'bottom' },
-            tooltip: {
-              callbacks: {
-                label: (ctx) => {
-                  const d = ctx.raw?.y;
-                  if (ctx.dataset.type === 'boxplot' && d) {
-                    // show 5-number + mean + p95 if present
-                    const parts = [`${ctx.dataset.label}`];
-                    parts.push(`min ${d.min?.toFixed?.(1)} ms`);
-                    parts.push(`Q1 ${d.q1?.toFixed?.(1)} ms`);
-                    parts.push(`median ${d.median?.toFixed?.(1)} ms`);
-                    parts.push(`Q3 ${d.q3?.toFixed?.(1)} ms`);
-                    parts.push(`max ${d.max?.toFixed?.(1)} ms`);
-                    if (d.mean != null) parts.push(`mean ${d.mean.toFixed(1)} ms`);
-                    if (d.p95 != null)  parts.push(`p95 ${d.p95.toFixed(1)} ms`);
-                    return parts;
-                  }
-                  if (ctx.dataset.type === 'violin') {
-                    return `${ctx.dataset.label} — ${ctx.raw.y.length} samples`;
-                  }
-                  // avg line
-                  return `${ctx.dataset.label}: ${ctx.parsed.y?.toFixed?.(1)} ms`;
-                }
-              }
-            }
-          }
-        }
-      });
-    }
-
-    (async function(){
+    (async ()=>{
       const hist = await loadHist();
-      const modeSel = document.getElementById('mode');
-      let chart = makeChart(buildDatasets(hist, modeSel.value));
 
-      modeSel.addEventListener('change', () => {
-        chart.destroy();
-        chart = makeChart(buildDatasets(hist, modeSel.value));
-      });
+      // Precompute label order once
+      const labelOrder = hist.map(r => tsLabel(r.ts));
+
+      const chartEl = document.getElementById('chart');
+      const sel = document.getElementById('mode');
+
+      function render(){
+        const { traces, layout } = build(labelOrder, hist, sel.value);
+        Plotly.react(chartEl, traces, layout, {responsive:true, displayModeBar:false});
+      }
+      render();
+      sel.addEventListener('change', render);
     })();
   </script>
 </body>
