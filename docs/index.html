@@ -4,19 +4,47 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>vLLM Latency — Llama 8B (TP=2)</title>
+
+  <!-- DM Sans -->
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+
   <style>
-    :root { --fg:#0f172a; --muted:#475569; --card:#fff; --bg:#f8fafc; }
+    :root{
+      /* Dark theme tuned to match the screenshot */
+      --bg:#0b0f12;        /* page + plot bg */
+      --card:#0b0f12;      /* panel bg (blend) */
+      --fg:#e5e7eb;        /* primary text */
+      --muted:#d4e2f5;     /* secondary text */
+      --grid:#2b3036;      /* grid lines */
+      --axis:#cbd5e1;      /* tick/axis labels */
+      --shadow:0 14px 40px rgba(0,0,0,.45);
+    }
     *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-    .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
-    header{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:center;margin-bottom:12px}
-    a{color:#2563eb;text-decoration:none}
-    .controls{display:flex;gap:12px;align-items:center;margin:8px 0 16px}
-    .chart-wrap{background:var(--card);border-radius:16px;box-shadow:0 10px 30px rgba(2,6,23,.06);padding:16px}
-    .muted{color:var(--muted)}
-    #chart{width:100%;height:480px}
-    select{padding:6px 8px;border-radius:8px;border:1px solid #cbd5e1;background:#fff}
+    html,body{height:100%}
+    body{
+      margin:0;
+      background:var(--bg);
+      color:var(--fg);
+      font:16px/1.45 "DM Sans", system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      text-rendering:optimizeLegibility;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+    }
+    .wrap{max-width:1200px;margin:32px auto;padding:0 20px}
+    header{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:flex-end;margin-bottom:12px}
+    h1{font-size:24px;margin:0;font-weight:600;letter-spacing:.2px}
+    a{color:#60a5fa;text-decoration:none}
+    a.muted{color:var(--muted)}
+    .chart-wrap{
+      background:var(--card);
+      border-radius:16px;
+      box-shadow:var(--shadow);
+      padding:12px 12px 4px;
+    }
+    #chart{width:100%;height:560px}
+    p.muted{color:var(--muted);margin-top:4px}
   </style>
 </head>
 <body>
@@ -28,24 +56,32 @@
     <p class="muted">
       Each point shows a <strong>distribution</strong> of per-iteration latencies for a run; an <em>Avg ms</em> line overlays the trend per batch size.
     </p>
-    <div class="controls">
-      <label class="muted" for="mode">Distribution type:</label>
-      <select id="mode">
-        <option value="box" selected>Box & whisker</option>
-        <option value="violin">Violin</option>
-      </select>
-    </div>
     <div class="chart-wrap"><div id="chart"></div></div>
   </div>
 
   <script>
+    // ---------- Helpers ----------
+    // Resolve CSS variables once so Plotly receives real colors
+    const _css = getComputedStyle(document.documentElement);
+    const cssVar = (name) => _css.getPropertyValue(name).trim();
+    const theme = {
+      bg: cssVar('--bg'),
+      fg: cssVar('--fg'),
+      axis: cssVar('--axis'),
+      grid: cssVar('--grid')
+    };
     const toMs = v => (v < 50 ? v * 1000 : v);
     const tsLabel = iso => {
       const d = new Date(iso);
-      // Nice, stable category label (YYYY-MM-DD HH:MM)
-      const pad = n => String(n).padStart(2,'0');
-      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      const p = n => String(n).padStart(2,'0');
+      return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
     };
+    const paletteByBS = (bs) => ({
+      1: '#22c55e', // green
+      2: '#e9fa2d', // darker green
+      4: '#1d4ed8', // blue
+      8: '#ef4444', // red
+    }[bs] || '#a3a3a3');
 
     async function loadHist(){
       const r = await fetch('./data/latency_history.json', {cache:'no-store'});
@@ -53,7 +89,24 @@
       return await r.json();
     }
 
-    function build(labelsOrdered, hist, mode){
+    function build(labelsOrdered, hist){
+      const quantileSorted = (arr, q) => {
+        const pos = (arr.length - 1) * q;
+        const base = Math.floor(pos);
+        const rest = pos - base;
+        return arr[base + 1] !== undefined ? arr[base] + rest * (arr[base + 1] - arr[base]) : arr[base];
+      };
+      const statsFor = (vals) => {
+        const a = [...vals].sort((x,y)=>x-y);
+        const n = a.length;
+        const min = a[0], max = a[n-1];
+        const q1 = quantileSorted(a, 0.25);
+        const med = quantileSorted(a, 0.50);
+        const q3 = quantileSorted(a, 0.75);
+        const avg = a.reduce((s,v)=>s+v,0)/Math.max(1,n);
+        return { n, min, max, q1, med, q3, avg };
+      };
+
       // Group runs by batch size
       const byBS = new Map();
       for (const r of hist) {
@@ -62,59 +115,128 @@
         const lats = (r.metrics?.latencies || []).map(toMs);
         const avg  = toMs(r.metrics?.avg_latency ?? NaN);
         if (!byBS.has(bs)) byBS.set(bs, { x: [], y: [], xAvg: [], yAvg: [] });
-        // For box/violin, we add one Y per latency sample and repeat the timestamp label
         for (const v of lats){ byBS.get(bs).x.push(lbl); byBS.get(bs).y.push(v); }
         if (!Number.isNaN(avg)) { byBS.get(bs).xAvg.push(lbl); byBS.get(bs).yAvg.push(avg); }
       }
 
       const traces = [];
       for (const [bs, obj] of byBS.entries()){
+        const color = paletteByBS(bs);
+
+        // Box trace (thin line, no fill to match clean look)
         traces.push({
-          type: mode, name: `bs=${bs}`,
-          x: obj.x, y: obj.y,
-          boxpoints: (mode==='box' ? 'outliers' : false),
-          // Violin looks better with some smoothing
-          ...(mode==='violin' ? { points: 'outliers', spanmode: 'hard' } : {})
+          type: 'box',
+          name: `bs=${bs}`,
+          x: obj.x,
+          y: obj.y,
+          boxpoints: 'outliers',
+          line: {color, width:1.6},
+          fillcolor: 'rgba(0,0,0,0)',
+          marker: {color},
+          offsetgroup: `g${bs}`,
+          hoverinfo: 'skip',
+          legendgroup: String(bs),
         });
+
+        // Average line
         traces.push({
-          type: 'scatter', mode: 'lines+markers',
+          type: 'scatter',
+          mode: 'lines+markers',
           name: `Avg ms (bs=${bs})`,
-          x: obj.xAvg, y: obj.yAvg,
-          hovertemplate: 'Avg: %{y:.1f} ms<br>%{x}<extra></extra>',
+          x: obj.xAvg,
+          y: obj.yAvg,
+          line: {color, width:2},
+          marker: {color, size:5},
+          hoverinfo: 'skip',
+          legendgroup: String(bs),
+        });
+
+        // Invisible hover markers with consolidated stats
+        const perLabel = new Map();
+        for (let i=0;i<obj.x.length;i++){
+          const lbl = obj.x[i]; const val = obj.y[i];
+          if (!perLabel.has(lbl)) perLabel.set(lbl, []);
+          perLabel.get(lbl).push(val);
+        }
+        const labels = Array.from(perLabel.keys()).sort();
+        const hoverY = [];
+        const custom = [];
+        for (const lbl of labels){
+          const s = statsFor(perLabel.get(lbl));
+          hoverY.push(s.med);
+          custom.push([s.n, s.avg, s.q1, s.med, s.q3, s.min, s.max]);
+        }
+        traces.push({
+          type: 'scatter',
+          mode: 'markers',
+          name: `bs=${bs} (hover)`,
+          x: labels,
+          y: hoverY,
+          customdata: custom,
+          marker: { size: 8, opacity: 0 },
+          hovertemplate:
+            `bs=${bs}<br>%{x}`+
+            '<br>n: %{customdata[0]}' +
+            '<br>avg: %{customdata[1]:.1f} ms' +
+            '<br>q1: %{customdata[2]:.1f} ms' +
+            '<br>median: %{customdata[3]:.1f} ms' +
+            '<br>q3: %{customdata[4]:.1f} ms' +
+            '<br>min: %{customdata[5]:.1f} ms' +
+            '<br>max: %{customdata[6]:.1f} ms<extra></extra>',
+          showlegend: false,
+          legendgroup: String(bs),
         });
       }
 
-      // Ensure timestamps appear in chronological order on a categorical axis
-      const labelsSet = new Set(labelsOrdered);
-      const categoryArray = Array.from(labelsSet).sort(); // ISO-like strings sort chronologically
+      // Categorical x in chronological order
+      const categoryArray = Array.from(new Set(labelsOrdered)).sort();
 
       const layout = {
-        margin: {l:60,r:20,t:10,b:60},
-        xaxis: { title:'Run timestamp', type:'category', categoryorder:'array', categoryarray: categoryArray, tickangle:-20 },
-        yaxis: { title:'Latency (ms)', rangemode:'auto' },
-        legend: { orientation:'h', x:0, y:1.1 },
-        boxmode: 'group',
-        violinmode: 'group',
-        hovermode: 'x unified',
+        margin: {l:70,r:110,t:10,b:64},
+        font: {family:'DM Sans, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif', size:13, color: theme.fg},
+        paper_bgcolor: theme.bg,
+        plot_bgcolor: theme.bg,
+        xaxis: {
+          title: {text:'Run timestamp', font:{size:13, color: theme.axis}},
+          type:'category',
+          categoryorder:'array',
+          categoryarray: categoryArray,
+          tickangle:-20,
+          tickfont:{color: theme.axis},
+          gridcolor: theme.grid,
+          zeroline:false,
+        },
+        yaxis: {
+          title: {text:'Latency (ms)', font:{size:13, color: theme.axis}},
+          tickfont:{color: theme.axis},
+          gridcolor: theme.grid,
+          zeroline:false,
+        },
+        legend: {
+          orientation:'v', x:1.02, y:0.5, xanchor:'left', yanchor:'middle',
+          font:{size:13, color: theme.fg},
+          bgcolor:'rgba(0,0,0,0)',
+          borderwidth:0,
+          itemwidth: 50
+        },
+        boxmode: 'overlay',
+        hovermode: 'closest',
+        hoverlabel: {
+          bgcolor:'#111827',
+          bordercolor:'#374151',
+          font:{family:'DM Sans, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif', size:12, color:'#e5e7eb'},
+          namelength: -1
+        }
       };
       return { traces, layout };
     }
 
+    // ---------- Run ----------
     (async ()=>{
       const hist = await loadHist();
-
-      // Precompute label order once
       const labelOrder = hist.map(r => tsLabel(r.ts));
-
-      const chartEl = document.getElementById('chart');
-      const sel = document.getElementById('mode');
-
-      function render(){
-        const { traces, layout } = build(labelOrder, hist, sel.value);
-        Plotly.react(chartEl, traces, layout, {responsive:true, displayModeBar:false});
-      }
-      render();
-      sel.addEventListener('change', render);
+      const { traces, layout } = build(labelOrder, hist);
+      Plotly.react(document.getElementById('chart'), traces, layout, {responsive:true, displayModeBar:false});
     })();
   </script>
 </body>
