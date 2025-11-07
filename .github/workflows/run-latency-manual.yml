@@ -23,5 +23,3 @@ jobs:
     permissions:
       actions: read
       contents: write
-    # If your secrets live in an Environment, uncomment:
-    # environment: production
