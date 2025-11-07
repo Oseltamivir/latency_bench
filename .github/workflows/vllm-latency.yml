@@ -1,4 +1,4 @@
-name: vLLM Llama 8B Latency (TP2) #!TODO
+name: vLLM Llama 8B Latency #!TODO
 
 on:
   schedule:
