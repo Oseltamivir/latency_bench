@@ -4,8 +4,12 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>vLLM Latency — Llama 8B (TP=2)</title>
+
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+  <!-- Boxplot/Violin plugin for Chart.js v4 -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-boxplot@4.3.0/build/index.umd.min.js"></script>
+
   <style>
     :root { --fg:#0f172a; --muted:#475569; --card:#fff; --bg:#f8fafc; }
     *{box-sizing:border-box}
@@ -13,9 +17,10 @@
     .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
     header{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:center;margin-bottom:12px}
     a{color:#2563eb;text-decoration:none}
+    .controls{display:flex;gap:12px;align-items:center;margin:8px 0 16px}
     canvas{background:var(--card);border-radius:16px;box-shadow:0 10px 30px rgba(2,6,23,.06);padding:16px}
     .muted{color:var(--muted)}
-    code{background:#e2e8f0;padding:2px 6px;border-radius:6px}
+    select{padding:6px 8px;border-radius:8px;border:1px solid #cbd5e1;background:#fff}
   </style>
 </head>
 <body>
@@ -24,69 +29,155 @@
       <h1>vLLM Latency — Llama 8B (TP=2)</h1>
       <a class="muted" href="./data/latency_history.json">raw JSON</a>
     </header>
-    <p class="muted">Auto-updated hourly from GitHub Actions. Lines show <em>Avg</em> and <em>P95</em> latency per batch size.</p>
+    <p class="muted">
+      Each point shows a <strong>distribution</strong> of per-iteration latencies for a run (min–Q1–median–Q3–max);
+      an <em>Avg ms</em> line overlays the trend per batch size.
+    </p>
+    <div class="controls">
+      <label class="muted">Distribution type:</label>
+      <select id="mode">
+        <option value="boxplot" selected>Box & whisker</option>
+        <option value="violin">Violin</option>
+      </select>
+    </div>
     <canvas id="chart" height="120"></canvas>
   </div>
+
   <script>
-    async function main(){
+    const toMs = v => (v == null ? null : (v < 50 ? v * 1000 : v)); // crude sec→ms
+
+    function quantiles(arr) {
+      if (!arr || !arr.length) return null;
+      const s = [...arr].sort((a,b)=>a-b);
+      const pick = p => s[Math.floor((s.length-1)*p)];
+      const sum = s.reduce((a,b)=>a+b,0);
+      return {
+        min: s[0],
+        q1: pick(0.25),
+        median: pick(0.50),
+        q3: pick(0.75),
+        max: s[s.length-1],
+        mean: sum / s.length,
+        p95: pick(0.95)
+      };
+    }
+
+    async function loadHist(){
       const resp = await fetch('./data/latency_history.json', {cache:'no-store'});
-      const hist = await resp.json();
+      return await resp.json();
+    }
+
+    function buildDatasets(hist, distType) {
+      // Group by batch_size
       const by = {};
-  
-      const toMs = v => (v == null ? null : (v < 50 ? v * 1000 : v)); // sec→ms heuristic
-      const q = (arr, p) => {
-        if (!arr || !arr.length) return null;
-        const s=[...arr].sort((a,b)=>a-b);
-        const idx = Math.floor((s.length - 1) * p);
-        return s[idx];
-      };
-      const getPxx = (m, p) => {
-        // direct fields if present
-        const direct = m[`p${p}_latency`] ?? m[`p${p}`] ?? m[`p${p}_latency_s`];
-        if (direct != null) return direct;
-        // nested "percentiles"
-        const per = m.percentiles || {};
-        if (per[p] != null) return per[p];
-        if (per[String(p)] != null) return per[String(p)];
-        // compute from raw latencies as last resort
-        return q(m.latencies, p/100);
-      };
-  
       for (const r of hist) {
-        const m = r.metrics;
         const t = new Date(r.ts);
         const bs = r.batch_size;
-  
+        const m  = r.metrics || {};
+        const lat = m.latencies || [];           // array of per-iter latencies
         const avg = m.avg_latency ?? m.avg_latency_s ?? m.avg_latency_seconds ?? null;
-        const p95 = getPxx(m, 95) ?? getPxx(m, 90) ?? getPxx(m, 99) ?? null; // try 95, then 90, then 99
-  
-        if (avg == null && p95 == null) continue; // nothing to plot
-  
-        by[bs] ||= { avg: [], p95: [] };
-        if (avg != null) by[bs].avg.push({ x: t, y: toMs(avg) });
-        if (p95 != null) by[bs].p95.push({ x: t, y: toMs(p95) });
-      }
-  
-      const ds = [];
-      const add = (label, key) => Object.keys(by).sort((a,b)=>a-b).forEach(bs => {
-        if (by[bs][key].length) {
-          ds.push({ label: `${label} (bs=${bs})`, data: by[bs][key], borderWidth: 2, fill: false, tension: .2 });
+
+        const q = quantiles(lat);
+        if (!q && avg == null) continue;
+
+        (by[bs] ||= {dist: [], avg: []});
+
+        if (q) {
+          // Chart.js boxplot/violin expects {x, y:{min,q1,median,q3,max}} or for violin just raw array
+          if (distType === 'violin') {
+            by[bs].dist.push({ x: t, y: lat.map(toMs) });
+          } else { // boxplot
+            by[bs].dist.push({
+              x: t,
+              y: {
+                min: toMs(q.min), q1: toMs(q.q1), median: toMs(q.median),
+                q3: toMs(q.q3), max: toMs(q.max), mean: toMs(q.mean), p95: toMs(q.p95)
+              }
+            });
+          }
         }
+        if (avg != null) by[bs].avg.push({ x: t, y: toMs(avg) });
+      }
+
+      const datasets = [];
+      // Distribution datasets
+      Object.keys(by).sort((a,b)=>+a-+b).forEach(bs => {
+        datasets.push({
+          type: distType,                         // 'boxplot' or 'violin'
+          label: `${distType === 'violin' ? 'Violin' : 'Box'} (bs=${bs})`,
+          data: by[bs].dist,
+          borderWidth: 1,
+          outlierRadius: 0,                       // hide outliers to keep it clean
+        });
       });
-      add('Avg ms','avg'); add('P95 ms','p95');
-  
-      new Chart(document.getElementById('chart').getContext('2d'), {
-        type: 'line',
-        data: { datasets: ds },
+      // Avg line datasets
+      Object.keys(by).sort((a,b)=>+a-+b).forEach(bs => {
+        datasets.push({
+          type: 'line',
+          label: `Avg ms (bs=${bs})`,
+          data: by[bs].avg,
+          borderWidth: 2,
+          fill: false,
+          tension: .2
+        });
+      });
+
+      return datasets;
+    }
+
+    function makeChart(datasets) {
+      const ctx = document.getElementById('chart').getContext('2d');
+      return new Chart(ctx, {
+        type: 'line', // base type (mixed datasets override this)
+        data: { datasets },
         options: {
           parsing: false,
           interaction: { mode: 'nearest', intersect: false },
-          scales: { x: { type: 'time' }, y: { title: { display: true, text: 'Latency (ms)' } } },
-          plugins: { legend: { position: 'bottom' } }
+          scales: {
+            x: { type: 'time' },
+            y: { title: { display: true, text: 'Latency (ms)' } }
+          },
+          plugins: {
+            legend: { position: 'bottom' },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => {
+                  const d = ctx.raw?.y;
+                  if (ctx.dataset.type === 'boxplot' && d) {
+                    // show 5-number + mean + p95 if present
+                    const parts = [`${ctx.dataset.label}`];
+                    parts.push(`min ${d.min?.toFixed?.(1)} ms`);
+                    parts.push(`Q1 ${d.q1?.toFixed?.(1)} ms`);
+                    parts.push(`median ${d.median?.toFixed?.(1)} ms`);
+                    parts.push(`Q3 ${d.q3?.toFixed?.(1)} ms`);
+                    parts.push(`max ${d.max?.toFixed?.(1)} ms`);
+                    if (d.mean != null) parts.push(`mean ${d.mean.toFixed(1)} ms`);
+                    if (d.p95 != null)  parts.push(`p95 ${d.p95.toFixed(1)} ms`);
+                    return parts;
+                  }
+                  if (ctx.dataset.type === 'violin') {
+                    return `${ctx.dataset.label} — ${ctx.raw.y.length} samples`;
+                  }
+                  // avg line
+                  return `${ctx.dataset.label}: ${ctx.parsed.y?.toFixed?.(1)} ms`;
+                }
+              }
+            }
+          }
         }
       });
     }
-    main();
+
+    (async function(){
+      const hist = await loadHist();
+      const modeSel = document.getElementById('mode');
+      let chart = makeChart(buildDatasets(hist, modeSel.value));
+
+      modeSel.addEventListener('change', () => {
+        chart.destroy();
+        chart = makeChart(buildDatasets(hist, modeSel.value));
+      });
+    })();
   </script>
 </body>
 </html>
