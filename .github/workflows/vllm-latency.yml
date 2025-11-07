@@ -159,15 +159,25 @@ jobs:
           set -euo pipefail
           mkdir -p ~/results
 
-          # Faster HF downloads + ensure CLI is on PATH
+          # 1) Clean, isolated env (no system-site packages)
+          python3 -m venv ~/vllm-venv
+          source ~/vllm-venv/bin/activate
+          python -m pip install --upgrade pip
+
+          # 2) Make HF downloads faster (optional)
           export HF_HUB_ENABLE_HF_TRANSFER=1
-          export PATH="$HOME/.local/bin:$PATH"
 
-          python3 -m pip install --upgrade --user pip
-          python3 -m pip install --user "vllm[bench]>=0.10.0" hf_transfer
+          # 3) Tell transformers not to even look for TF/JAX
+          export TRANSFORMERS_NO_TF=1
+          export TRANSFORMERS_NO_FLAX=1
+          # (extra belt-and-suspenders; not strictly needed in a venv)
+          export PYTHONNOUSERSITE=1
 
-          nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader > ~/results/gpu.txt || true
-          python3 - <<'PY'
+          # 4) Install deps (NO --user)
+          pip install "vllm[bench]>=0.10.0" hf_transfer
+
+          # 5) Capture env info
+          python - <<'PY'
           import json, platform, sys, importlib
           info={"python":sys.version.split()[0],"torch":None,"vllm":None,"platform":platform.platform()}
           for m in ("torch","vllm"):
@@ -176,9 +186,8 @@ jobs:
           open("/home/ubuntu/results/env.json","w").write(json.dumps(info, indent=2))
           PY
 
-          # Safe default even with `set -u` if BS_LIST wasn't passed
+          # 6) Bench (use the venv's vllm)
           BS_LIST="${BS_LIST:-1 2 4 8}"
-
           for B in ${BS_LIST}; do
             vllm bench latency \
               --model "${MODEL_ID}" \
@@ -187,9 +196,7 @@ jobs:
               --input-len "${INPUT_LEN}" \
               --output-len "${OUTPUT_LEN}" \
               --num-iters "${NUM_ITERS}" \
-              --num-iters-warmup "${NUM_WARMUP}" \
-              --disable-detokenize \
-              --output-json "/home/ubuntu/results/latency_bs${B}.json"
+              --num-iters-warmup "${NUM_WARMUP}"
           done
           REMOTE_SCRIPT
 
