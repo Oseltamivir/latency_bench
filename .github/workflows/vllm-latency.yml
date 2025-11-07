@@ -293,3 +293,57 @@ jobs:
           git add docs/data
           git commit -m "bench: append latency data [skip ci]" || echo "No data changes"
           git push origin $PAGES_BRANCH
+      
+      - name: Notify Slack (success/failure)
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          ACTUAL_TP_SIZE: ${{ steps.gpu_config.outputs.tp_size }}
+          GPU_COUNT: ${{ steps.gpu_config.outputs.gpu_count }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Choose emoji/color by status
+          if [ "$JOB_STATUS" = "success" ]; then
+            EMOJI=":white_check_mark:"; COLOR="#2eb886"
+          elif [ "$JOB_STATUS" = "cancelled" ]; then
+            EMOJI=":warning:"; COLOR="#daa038"
+          else
+            EMOJI=":x:"; COLOR="#e01e5a"
+          fi
+
+          TITLE="$EMOJI vLLM Latency — TP=${ACTUAL_TP_SIZE} (GPUx${GPU_COUNT}) — ${JOB_STATUS^^}"
+          SUB="Repo \`${{ github.repository }}\` • Branch \`${BRANCH}\` • Commit \`${SHA:0:7}\`"
+          CFG="Model \`${MODEL_ID}\` • BS \`${BS_LIST}\` • In ${INPUT_LEN} / Out ${OUTPUT_LEN} • iters ${NUM_ITERS} (warmup ${NUM_WARMUP})"
+
+          # Build Slack payload with blocks
+          payload=$(jq -n \
+            --arg title "$TITLE" \
+            --arg sub "$SUB" \
+            --arg cfg "$CFG" \
+            --arg run "$RUN_URL" \
+            --arg color "$COLOR" '
+            {
+              attachments: [
+                {
+                  color: $color,
+                  blocks: [
+                    { "type": "section", "text": { "type": "mrkdwn", "text": $title } },
+                    { "type": "context", "elements": [ { "type": "mrkdwn", "text": $sub } ] },
+                    { "type": "context", "elements": [ { "type": "mrkdwn", "text": $cfg } ] },
+                    { "type": "actions", "elements": [
+                      { "type": "button", "text": { "type": "plain_text", "text": "View GitHub Run" }, "url": $run }
+                    ]}
+                  ]
+                }
+              ]
+            }')
+
+          curl -fsS -X POST -H 'Content-Type: application/json' \
+            --data "$payload" \
+            "$SLACK_WEBHOOK_URL" || echo "Slack notify failed (continuing)"
