@@ -210,49 +210,36 @@ jobs:
         shell: bash
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import glob, json, os, statistics
-
-          def pick_avg(d):
-              for k in ("avg_latency","average_latency","mean_latency"):
-                  if k in d:
-                      return d[k]
-              return None
-
-          def pick_p50(d):
-              perc = d.get("percentiles") or {}
-              p50 = perc.get("50")
-              if p50 is not None:
-                  return p50
-              lats = d.get("latencies") or []
-              if lats:
-                  try:
-                      return statistics.median(lats)
-                  except Exception:
-                      s = sorted(lats)
-                      return s[len(s)//2]
-              return None
+          import glob, json, os
 
           def to_ms(x):
               if x is None:
                   return None
-              # vLLM outputs seconds; convert if it looks like seconds (<50s).
-              return x * 1000.0 if x < 50 else x
+              return x * 1000.0 if x < 50 else x  # assume seconds if <50s
 
           files = sorted(glob.glob("results/latency_bs*.json"))
           rows = []
           for f in files:
               d = json.load(open(f))
               bs = int(os.path.basename(f).split("bs")[1].split(".")[0])
-              avg = to_ms(pick_avg(d))
-              p50 = to_ms(pick_p50(d))
-              rows.append((bs, avg, p50))
+              avg = to_ms(d.get("avg_latency"))
+              percentiles = d.get("percentiles", {})
+              p10 = to_ms(percentiles.get("10"))
+              p25 = to_ms(percentiles.get("25"))
+              p50 = to_ms(percentiles.get("50"))
+              p75 = to_ms(percentiles.get("75"))
+              p90 = to_ms(percentiles.get("90"))
+              p99 = to_ms(percentiles.get("99"))
+              rows.append((bs, avg, p10, p25, p50, p75, p90, p99))
 
-          print("## vLLM Latency — Llama 8B (TP=${{ steps.gpu_config.outputs.tp_size }})\n")
-          print("| Batch | Avg (ms) | P50 (ms) |")
-          print("|---:|---:|---:|")
-          for (bs, avg, p50) in rows:
+          print("## vLLM Latency — Llama 8B (TP=${{ steps.gpu_config.outputs.tp_size }})")
+          print()
+          print("| Batch | Avg (ms) | P10 | P25 | P50 | P75 | P90 | P99 |")
+          print("|---:|---:|---:|---:|---:|---:|---:|---:|")
+          for r in rows:
+              bs, avg, p10, p25, p50, p75, p90, p99 = r
               fm = lambda x: ("" if x is None else f"{x:.1f}")
-              print(f"| {bs} | {fm(avg)} | {fm(p50)} |")
+              print(f"| {bs} | {fm(avg)} | {fm(p10)} | {fm(p25)} | {fm(p50)} | {fm(p75)} | {fm(p90)} | {fm(p99)} |")
           PY
 
       - name: Update GitHub Pages data only
@@ -275,7 +262,7 @@ jobs:
           cp -r _results_tmp results
 
           python - <<'PY'
-          import glob, json, os, time, statistics
+          import glob, json, os, time
           ts = int(time.time()*1000)
           hist_path = "docs/data/latency_history.json"
           hist = json.load(open(hist_path))
@@ -286,20 +273,14 @@ jobs:
               d = json.load(open(f))
               bs = int(os.path.basename(f).split("bs")[1].split(".")[0])
 
-              # Ensure P50 exists (some versions may omit percentiles)
-              if "percentiles" not in d or "50" not in d.get("percentiles", {}):
-                  lats = d.get("latencies") or []
-                  if lats:
-                      try:
-                          med = statistics.median(lats)
-                      except Exception:
-                          s = sorted(lats); med = s[len(s)//2]
-                      d.setdefault("percentiles", {})["50"] = med
+              # make sure percentiles are present in case older vLLM versions miss them
+              if "percentiles" not in d:
+                  d["percentiles"] = {}
 
               hist.append({
                   "ts": ts,
                   "batch_size": bs,
-                  "metrics": d,     # keep original fields (avg_latency, latencies, percentiles, etc.)
+                  "metrics": d,
                   "meta": meta,
                   "gpu": gpu
               })
