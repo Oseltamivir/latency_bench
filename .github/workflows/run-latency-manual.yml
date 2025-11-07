@@ -29,6 +29,11 @@ on:
         type: number
         default: 8
 
+  workflow_call:
+    secrets:
+      LAMBDA_API_KEY: { required: true }
+      LL_SSH_PRIVATE_KEY: { required: true }
+
 jobs:
   run-latency-bench:
     # Call the reusable workflow in this repo
