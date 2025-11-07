@@ -31,31 +31,16 @@ on:
         type: string
   workflow_call:
     inputs:
-      model_id:
-        required: false
-        type: string
-      input_len:
-        required: false
-        type: number
-      output_len:
-        required: false
-        type: number
-      min_bs:
-        required: false
-        type: number
-      max_bs:
-        required: false
-        type: number
-      bs_list:
-        required: false
-        type: string
+      model_id:   { type: string, required: false }
+      input_len:  { type: string, required: false }
+      output_len: { type: string, required: false }
+      min_bs:     { type: string, required: false }
+      max_bs:     { type: string, required: false }
+      bs_list:    { type: string, required: false }
     secrets:
-      LAMBDA_API_KEY:
-        required: true
-      LL_SSH_PRIVATE_KEY:
-        required: true
-      HF_TOKEN:
-        required: false
+      LAMBDA_API_KEY:     { required: true }
+      LL_SSH_PRIVATE_KEY: { required: true }
+      HF_TOKEN:           { required: false }
 
 permissions:
   contents: write   # commit docs/ + history for Pages
