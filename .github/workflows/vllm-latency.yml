@@ -143,7 +143,7 @@ jobs:
           set -euo pipefail
           REMOTE=ubuntu@${{ steps.wait.outputs.instance_ip }}
           # Send a one-shot script to the instance and execute it
-          ssh -i ~/.ssh/lambda_key -o StrictHostKeyChecking=no "$REMOTE" bash -s <<REMOTE_SCRIPT
+          ssh -i ~/.ssh/lambda_key -o StrictHostKeyChecking=no "$REMOTE" bash -s <<'REMOTE_SCRIPT'
           set -euo pipefail
           mkdir -p ~/results
           # Ensure Python and pip are ready; Lambda Cloud images ship with Python 3.10 on Ubuntu 22.04
