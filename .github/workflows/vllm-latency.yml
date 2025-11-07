@@ -2,7 +2,7 @@ name: vLLM Llama 8B Latency (TP2)
 
 on:
   schedule:
-    - cron: "0 * * * *"  # hourly (UTC)
+    - cron: "0 0 * * 0"  # Weekly placeholder (UTC)
   workflow_dispatch:
 
 permissions:
@@ -25,7 +25,7 @@ jobs:
       NUM_ITERS: 5
       NUM_WARMUP: 2
       CUDA_VISIBLE_DEVICES: 0,1
-      BS_LIST: "1 2 4 8"                  # ← run all four batch sizes
+      BS_LIST: "4"
       LL_API_URL: https://cloud.lambdalabs.com/api/v1
       LL_REGION: ${{ vars.LL_REGION }}
       LL_INSTANCE_TYPE: ${{ vars.LL_INSTANCE_TYPE }}
