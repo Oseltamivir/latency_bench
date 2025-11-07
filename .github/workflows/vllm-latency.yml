@@ -210,31 +210,52 @@ jobs:
         shell: bash
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import glob, json, os
-          files = sorted(glob.glob("results/latency_bs*.json"))
-          rows=[]
-          for f in files:
-            d=json.load(open(f))
-            bs=int(os.path.basename(f).split("bs")[1].split(".")[0])
-            def get(*c):
-              for k in c:
-                if k in d: return d[k]
+          import glob, json, os, statistics
+
+          def pick_avg(d):
+              for k in ("avg_latency","average_latency","mean_latency"):
+                  if k in d:
+                      return d[k]
               return None
-            avg = get("avg_latency","avg_latency_s","avg_latency_seconds")
-            p50 = get("p50_latency","p50_latency_s","p50")
-            p95 = get("p95_latency","p95_latency_s","p95")
-            to_ms=lambda x: (x*1000.0 if (x is not None and x<50) else x)  # crude sec→ms
-            rows.append((bs, to_ms(avg), to_ms(p50), to_ms(p95)))
-          print("## vLLM Latency — Llama 8B (TP=${{ steps.gpu_config.outputs.tp_size }})")
-          print()
-          print("| Batch | Avg (ms) | P50 (ms) | P95 (ms) |")
-          print("|---:|---:|---:|---:|")
-          for (bs,avg,p50,p95) in rows:
-            fm=lambda x: ("" if x is None else f"{x:.1f}")
-            print(f"| {bs} | {fm(avg)} | {fm(p50)} | {fm(p95)} |")
+
+          def pick_p50(d):
+              perc = d.get("percentiles") or {}
+              p50 = perc.get("50")
+              if p50 is not None:
+                  return p50
+              lats = d.get("latencies") or []
+              if lats:
+                  try:
+                      return statistics.median(lats)
+                  except Exception:
+                      s = sorted(lats)
+                      return s[len(s)//2]
+              return None
+
+          def to_ms(x):
+              if x is None:
+                  return None
+              # vLLM outputs seconds; convert if it looks like seconds (<50s).
+              return x * 1000.0 if x < 50 else x
+
+          files = sorted(glob.glob("results/latency_bs*.json"))
+          rows = []
+          for f in files:
+              d = json.load(open(f))
+              bs = int(os.path.basename(f).split("bs")[1].split(".")[0])
+              avg = to_ms(pick_avg(d))
+              p50 = to_ms(pick_p50(d))
+              rows.append((bs, avg, p50))
+
+          print("## vLLM Latency — Llama 8B (TP=${{ steps.gpu_config.outputs.tp_size }})\n")
+          print("| Batch | Avg (ms) | P50 (ms) |")
+          print("|---:|---:|---:|")
+          for (bs, avg, p50) in rows:
+              fm = lambda x: ("" if x is None else f"{x:.1f}")
+              print(f"| {bs} | {fm(avg)} | {fm(p50)} |")
           PY
 
-      - name: Update GitHub Pages data & chart
+      - name: Update GitHub Pages data only
         run: |
           set -euo pipefail
           cp -r results _results_tmp
@@ -254,72 +275,40 @@ jobs:
           cp -r _results_tmp results
 
           python - <<'PY'
-          import glob, json, os, time
-          ts=int(time.time()*1000)
-          hist_path="docs/data/latency_history.json"
-          hist=json.load(open(hist_path))
-          meta=json.load(open("results/env.json"))
-          gpu=open("results/gpu.txt").read().strip() if os.path.exists("results/gpu.txt") else ""
-          for f in sorted(glob.glob("results/latency_bs*.json")):
-              d=json.load(open(f))
-              bs=int(os.path.basename(f).split("bs")[1].split(".")[0])
-              hist.append({"ts": ts, "batch_size": bs, "metrics": d, "meta": meta, "gpu": gpu})
-          open(hist_path,"w").write(json.dumps(hist, indent=2))
-          PY
+          import glob, json, os, time, statistics
+          ts = int(time.time()*1000)
+          hist_path = "docs/data/latency_history.json"
+          hist = json.load(open(hist_path))
+          meta = json.load(open("results/env.json"))
+          gpu = open("results/gpu.txt").read().strip() if os.path.exists("results/gpu.txt") else ""
 
-          if [ ! -f docs/index.html ]; then
-            cat > docs/index.html <<'HTML'
-          <!doctype html><html><head>
-            <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-            <title>vLLM Latency — Llama 8B (TP=2)</title>
-            <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-            <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-            <style>
-              :root { --fg:#0f172a; --muted:#475569; --card:#fff; --bg:#f8fafc; }
-              *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-              .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
-              header{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:center;margin-bottom:12px}
-              a{color:#2563eb;text-decoration:none} canvas{background:var(--card);border-radius:16px;box-shadow:0 10px 30px rgba(2,6,23,.06);padding:16px}
-              .muted{color:var(--muted)} code{background:#e2e8f0;padding:2px 6px;border-radius:6px}
-            </style></head><body>
-            <div class="wrap">
-              <header>
-                <h1>vLLM Latency — Llama 8B (TP=2)</h1>
-                <a class="muted" href="./data/latency_history.json">raw JSON</a>
-              </header>
-              <p class="muted">Auto-updated hourly from GitHub Actions. Lines show <em>Avg</em> and <em>P95</em> latency per batch size.</p>
-              <canvas id="chart" height="120"></canvas>
-            </div>
-            <script>
-              async function main(){
-                const resp = await fetch('./data/latency_history.json', {cache:'no-store'});
-                const hist = await resp.json(); const by = {};
-                for(const r of hist){
-                  const m=r.metrics; const t=new Date(r.ts); const bs=r.batch_size;
-                  const avg=(m.avg_latency ?? m.avg_latency_s ?? m.avg_latency_seconds);
-                  const p95=(m.p95_latency ?? m.p95 ?? m.p95_latency_s);
-                  if(avg==null || p95==null) continue;
-                  const toMs=v => (v<50 ? v*1000 : v);
-                  (by[bs] ||= {avg:[], p95:[]}).avg.push({x:t,y:toMs(avg)});
-                  by[bs].p95.push({x:t,y:toMs(p95)});
-                }
-                const ds=[]; const add=(label,key)=>Object.keys(by).sort((a,b)=>a-b).forEach(bs=>{
-                  ds.push({label:`${label} (bs=${bs})`, data: by[bs][key], borderWidth:2, fill:false, tension:.2});
-                });
-                add('Avg ms','avg'); add('P95 ms','p95');
-                new Chart(document.getElementById('chart').getContext('2d'),{
-                  type:'line', data:{datasets:ds}, options:{
-                    parsing:false, interaction:{mode:'nearest',intersect:false},
-                    scales:{x:{type:'time'}, y:{title:{display:true,text:'Latency (ms)'}}},
-                    plugins:{legend:{position:'bottom'}}
-                  }});
-              } main();
-            </script></body></html>
-          HTML
-          fi
+          for f in sorted(glob.glob("results/latency_bs*.json")):
+              d = json.load(open(f))
+              bs = int(os.path.basename(f).split("bs")[1].split(".")[0])
+
+              # Ensure P50 exists (some versions may omit percentiles)
+              if "percentiles" not in d or "50" not in d.get("percentiles", {}):
+                  lats = d.get("latencies") or []
+                  if lats:
+                      try:
+                          med = statistics.median(lats)
+                      except Exception:
+                          s = sorted(lats); med = s[len(s)//2]
+                      d.setdefault("percentiles", {})["50"] = med
+
+              hist.append({
+                  "ts": ts,
+                  "batch_size": bs,
+                  "metrics": d,     # keep original fields (avg_latency, latencies, percentiles, etc.)
+                  "meta": meta,
+                  "gpu": gpu
+              })
+
+          open(hist_path, "w").write(json.dumps(hist, indent=2))
+          PY
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs
-          git commit -m "bench: update latency history & site [skip ci]" || echo "No changes"
+          git add docs/data
+          git commit -m "bench: append latency data [skip ci]" || echo "No data changes"
           git push origin $PAGES_BRANCH
