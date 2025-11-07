@@ -26,13 +26,14 @@ jobs:
       NUM_WARMUP: 2
       CUDA_VISIBLE_DEVICES: 0,1
       # Batch sizes to run on the remote instance (replaces the matrix)
-      BS_LIST: "1 2 4 8"
+      BS_LIST: "1"
 
       # Lambda Cloud API configuration (set repo Variables where possible)
       LL_API_URL: https://cloud.lambdalabs.com/api/v1
       LL_REGION: ${{ vars.LL_REGION }}            # e.g. us-south-1
       LL_INSTANCE_TYPE: ${{ vars.LL_INSTANCE_TYPE }}  # e.g. gpu_2x_a10 or gpu_1x_a6000
       LL_SSH_KEY_NAME: ${{ vars.LL_SSH_KEY_NAME }}    # name of an SSH key already uploaded to Lambda Cloud
+      PAGES_BRANCH: gh-pages
 
     steps:
       - uses: actions/checkout@v4
@@ -158,6 +159,7 @@ jobs:
              bash -s" <<'REMOTE_SCRIPT'
           set -euo pipefail
           mkdir -p ~/results
+          cd ~/results 
 
           # 1) Clean, isolated env (no system-site packages)
           python3 -m venv ~/vllm-venv
@@ -187,7 +189,7 @@ jobs:
           PY
 
           # 6) Bench (use the venv's vllm)
-          BS_LIST="${BS_LIST:-1 2 4 8}"
+          BS_LIST="${BS_LIST:-1 2 4}"
           for B in ${BS_LIST}; do
             vllm bench latency \
               --model "${MODEL_ID}" \
@@ -259,9 +261,23 @@ jobs:
 
       - name: Update GitHub Pages data & chart
         run: |
+          set -euo pipefail
+          # Preserve results before branch switch
+          cp -r results _results_tmp
+
+          git fetch origin $PAGES_BRANCH || true
+          if git show-ref --verify --quiet refs/heads/$PAGES_BRANCH; then
+            git switch $PAGES_BRANCH
+          elif git show-ref --verify --quiet refs/remotes/origin/$PAGES_BRANCH; then
+            git switch --create $PAGES_BRANCH origin/$PAGES_BRANCH
+          else
+            git switch --orphan $PAGES_BRANCH
+            git rm -rf . >/dev/null 2>&1 || true
+          fi
+
           mkdir -p docs/data
-          # init history file if it doesn't exist
           [ -f docs/data/latency_history.json ] || echo "[]" > docs/data/latency_history.json
+          cp -r _results_tmp results
 
           python - <<'PY'
           import glob, json, os, time
@@ -277,7 +293,6 @@ jobs:
           open(hist_path,"w").write(json.dumps(hist, indent=2))
           PY
 
-          # Minimal site (first run only)
           if [ ! -f docs/index.html ]; then
             cat > docs/index.html <<'HTML'
           <!doctype html>
@@ -321,7 +336,6 @@ jobs:
                   const avg=(m.avg_latency ?? m.avg_latency_s ?? m.avg_latency_seconds);
                   const p95=(m.p95_latency ?? m.p95 ?? m.p95_latency_s);
                   if(avg==null || p95==null) continue;
-                  // heuristic: convert seconds -> ms if small
                   const toMs = v => (v<50 ? v*1000 : v);
                   by[bs] = by[bs] || {avg:[], p95:[]};
                   by[bs].avg.push({x:t, y:toMs(avg)});
@@ -350,5 +364,5 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs
-          git commit -m "bench: append latency results & update chart data [skip ci]" || echo "No changes to commit"
-          git push
+          git commit -m "bench: update latency history & site [skip ci]" || echo "No changes"
+          git push origin $PAGES_BRANCH
