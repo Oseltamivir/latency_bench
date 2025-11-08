@@ -157,7 +157,7 @@ jobs:
 
           # --- GSM8K table ---
           import os
-          gdirs = sorted(glob.glob("results/gsm8k_bs*"))
+          gdirs = sorted([d for d in glob.glob("results/gsm8k_bs*") if os.path.isdir(d)])
           if gdirs:
               print("\n## GSM8K (lm-eval)\n")
               print("| Batch | Acc | Acc_norm |")
