@@ -106,30 +106,6 @@ jobs:
             echo $! > results/metrics/gpu_mon.pid
           fi
 
-          # CPU utilization time-series (mpstat, 1s cadence)
-          if command -v mpstat >/dev/null 2>&1; then
-            mpstat -P ALL 1 > results/metrics/cpu_mpstat.log 2>&1 &
-            echo $! > results/metrics/cpu_mon.pid
-          fi
-
-          # System memory time-series (from /proc/meminfo, 1s cadence)
-          echo "ts_unix,mem_total_kb,mem_available_kb,swap_total_kb,swap_free_kb" > results/metrics/mem_timeseries.csv
-          (
-            while true; do
-              TS=$(date +%s)
-              awk -v ts="$TS" '
-                BEGIN{mt=ma=st=sf=0}
-                $1=="MemTotal:"{mt=$2}
-                $1=="MemAvailable:"{ma=$2}
-                $1=="SwapTotal:"{st=$2}
-                $1=="SwapFree:"{sf=$2}
-                END{printf("%s,%d,%d,%d,%d\n", ts, mt, ma, st, sf)}
-              ' /proc/meminfo
-              sleep 1
-            done
-          ) >> results/metrics/mem_timeseries.csv 2>/dev/null &
-          echo $! > results/metrics/mem_mon.pid
-
           # Ensure monitors are stopped on exit
           cleanup_monitors() {
             for f in results/metrics/*_mon.pid; do
@@ -179,24 +155,8 @@ jobs:
           if command -v mpstat >/dev/null 2>&1; then
             mpstat -P ALL 1 > results/metrics/cpu_mpstat_gsm.log 2>&1 &
             echo $! > results/metrics/cpu_mon_gsm.pid
+            sleep 1
           fi
-
-          echo "ts_unix,mem_total_kb,mem_available_kb,swap_total_kb,swap_free_kb" > results/metrics/mem_timeseries_gsm.csv
-          (
-            while true; do
-              TS=$(date +%s)
-              awk -v ts="$TS" '
-                BEGIN{mt=ma=st=sf=0}
-                $1=="MemTotal:"{mt=$2}
-                $1=="MemAvailable:"{ma=$2}
-                $1=="SwapTotal:"{st=$2}
-                $1=="SwapFree:"{sf=$2}
-                END{printf("%s,%d,%d,%d,%d\n", ts, mt, ma, st, sf)}
-              ' /proc/meminfo
-              sleep 1
-            done
-          ) >> results/metrics/mem_timeseries_gsm.csv 2>/dev/null &
-          echo $! > results/metrics/mem_mon_gsm.pid
 
           cleanup_monitors() {
             for f in results/metrics/*_mon_gsm.pid; do
@@ -232,7 +192,8 @@ jobs:
             results/gpu.txt
             results/gpu.json
             results/cpu.json
-            results/metrics/**
+            results/metrics/gpu_timeseries.csv
+            results/metrics/cpu_mpstat_gsm.log
           if-no-files-found: error
 
       - name: Add markdown table to Job Summary
