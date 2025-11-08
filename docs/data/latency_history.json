@@ -6721,5 +6721,350 @@
       }
     },
     "gpu": "NVIDIA A10, 23028 MiB, 570.148.08"
+  },
+  {
+    "ts": 1762643161243,
+    "batch_size": 2,
+    "metrics": {
+      "avg_latency": 0.8928412314235175,
+      "latencies": [
+        0.8911943200073438,
+        0.889780666999286,
+        0.8908034899941413,
+        0.9012059569940902,
+        0.890675075002946,
+        0.8916195460042218,
+        0.8915841629932402,
+        0.8866673899901798,
+        0.88921856500383,
+        0.8890080409910297,
+        0.8900255820044549,
+        0.8900610870041419,
+        0.890581518993713,
+        0.8904841369949281,
+        0.9039961369999219,
+        0.8922807659982936,
+        0.8910443369968561,
+        0.8914794779993827,
+        0.8916233659983845,
+        0.8911942629929399,
+        0.8925683120032772,
+        0.891372747006244,
+        0.8928439349983819,
+        0.8919871499965666,
+        0.8924313329916913,
+        0.8920171100035077,
+        0.8931674089981243,
+        0.891937214997597,
+        0.8934700279933168,
+        0.8933752910088515,
+        0.8930057800025679,
+        0.8943451670056675,
+        0.8949578460014891,
+        0.8942914859944722,
+        0.8949091009999393,
+        0.8953807299985783,
+        0.8977006689965492,
+        0.8967136419960298,
+        0.8959728439949686,
+        0.8966735759895528
+      ],
+      "percentiles": {
+        "10": 0.890001090503938,
+        "25": 0.8909841252461774,
+        "50": 0.8920021300000371,
+        "75": 0.894304906247271,
+        "90": 0.8966775825902005,
+        "99": 0.9029079667976475
+      }
+    },
+    "meta": {
+      "python": "3.11.14",
+      "platform": "Linux-6.8.0-60-generic-x86_64-with-glibc2.35",
+      "system": {
+        "system": "Linux",
+        "machine": "x86_64",
+        "release": "6.8.0-60-generic",
+        "version": "#63~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Tue Apr 22 19:00:15 UTC 2",
+        "kernel": "6.8.0-60-generic",
+        "os_release": {
+          "PRETTY_NAME": "Ubuntu 22.04.5 LTS",
+          "NAME": "Ubuntu",
+          "VERSION_ID": "22.04",
+          "VERSION": "22.04.5 LTS (Jammy Jellyfish)",
+          "VERSION_CODENAME": "jammy",
+          "ID": "ubuntu",
+          "ID_LIKE": "debian",
+          "HOME_URL": "https://www.ubuntu.com/",
+          "SUPPORT_URL": "https://help.ubuntu.com/",
+          "BUG_REPORT_URL": "https://bugs.launchpad.net/ubuntu/",
+          "PRIVACY_POLICY_URL": "https://www.ubuntu.com/legal/terms-and-policies/privacy-policy",
+          "UBUNTU_CODENAME": "jammy"
+        }
+      },
+      "packages": {
+        "torch": "2.8.0+cu128",
+        "vllm": "0.11.0",
+        "transformers": "4.57.1"
+      },
+      "cuda": {
+        "nvidia_smi_cuda": "12.8",
+        "nvidia_driver": "570.148.08",
+        "torch_cuda": "12.8",
+        "cudnn": 91002,
+        "avail": true,
+        "device_count": 1
+      },
+      "cpu": {
+        "arch": "x86_64",
+        "count_logical": 30,
+        "model_name": "Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz",
+        "vendor_id": "GenuineIntel",
+        "sockets": "30",
+        "unique_core_ids": 1,
+        "cpus": "30",
+        "cores_per_socket": "1",
+        "threads_per_core": "1",
+        "l3_cache": "480 MiB (30 instances)",
+        "architecture": "x86_64"
+      },
+      "memory": {
+        "mem_total_kb": 232955528,
+        "mem_free_kb": 206218436,
+        "mem_available_kb": 227857856,
+        "swap_total_kb": 0
+      }
+    },
+    "gpu": "NVIDIA A10, 23028 MiB, 570.148.08"
+  },
+  {
+    "ts": 1762643161243,
+    "batch_size": 4,
+    "metrics": {
+      "avg_latency": 0.9658951886016439,
+      "latencies": [
+        0.9596618770010537,
+        0.9732940899993991,
+        0.9614174460002687,
+        0.9633915269951103,
+        0.9635886899923207,
+        0.9608263200061629,
+        0.9769520730042132,
+        0.9637632079975447,
+        0.961983536995831,
+        0.9629931649978971,
+        0.9605414219986415,
+        0.9609578189993044,
+        0.9603456120094052,
+        0.960555238998495,
+        0.962195927000721,
+        0.9618528190039797,
+        0.9610731879947707,
+        0.9625212990067666,
+        0.9627589040028397,
+        0.9648431880050339,
+        0.9767491920065368,
+        0.9652679160062689,
+        0.9652085400011856,
+        0.9643350200058194,
+        0.9662445709982421,
+        0.9646919989900198,
+        0.9642265110014705,
+        0.9691070170083549,
+        0.9790830230049323,
+        0.9683161849970929,
+        0.9658129750023363,
+        0.9657044740015408,
+        0.9669438100099796,
+        0.9639869940001518,
+        0.9664938019996043,
+        0.9685187490103999,
+        0.9668369709979743,
+        0.9706791140051791,
+        0.9718426050094422,
+        0.9802407259994652
+      ],
+      "percentiles": {
+        "10": 0.9607992119053961,
+        "25": 0.9621428294994985,
+        "50": 0.9645135094979196,
+        "75": 0.967286903756758,
+        "90": 0.9736396002001129,
+        "99": 0.9797892218315973
+      }
+    },
+    "meta": {
+      "python": "3.11.14",
+      "platform": "Linux-6.8.0-60-generic-x86_64-with-glibc2.35",
+      "system": {
+        "system": "Linux",
+        "machine": "x86_64",
+        "release": "6.8.0-60-generic",
+        "version": "#63~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Tue Apr 22 19:00:15 UTC 2",
+        "kernel": "6.8.0-60-generic",
+        "os_release": {
+          "PRETTY_NAME": "Ubuntu 22.04.5 LTS",
+          "NAME": "Ubuntu",
+          "VERSION_ID": "22.04",
+          "VERSION": "22.04.5 LTS (Jammy Jellyfish)",
+          "VERSION_CODENAME": "jammy",
+          "ID": "ubuntu",
+          "ID_LIKE": "debian",
+          "HOME_URL": "https://www.ubuntu.com/",
+          "SUPPORT_URL": "https://help.ubuntu.com/",
+          "BUG_REPORT_URL": "https://bugs.launchpad.net/ubuntu/",
+          "PRIVACY_POLICY_URL": "https://www.ubuntu.com/legal/terms-and-policies/privacy-policy",
+          "UBUNTU_CODENAME": "jammy"
+        }
+      },
+      "packages": {
+        "torch": "2.8.0+cu128",
+        "vllm": "0.11.0",
+        "transformers": "4.57.1"
+      },
+      "cuda": {
+        "nvidia_smi_cuda": "12.8",
+        "nvidia_driver": "570.148.08",
+        "torch_cuda": "12.8",
+        "cudnn": 91002,
+        "avail": true,
+        "device_count": 1
+      },
+      "cpu": {
+        "arch": "x86_64",
+        "count_logical": 30,
+        "model_name": "Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz",
+        "vendor_id": "GenuineIntel",
+        "sockets": "30",
+        "unique_core_ids": 1,
+        "cpus": "30",
+        "cores_per_socket": "1",
+        "threads_per_core": "1",
+        "l3_cache": "480 MiB (30 instances)",
+        "architecture": "x86_64"
+      },
+      "memory": {
+        "mem_total_kb": 232955528,
+        "mem_free_kb": 206218436,
+        "mem_available_kb": 227857856,
+        "swap_total_kb": 0
+      }
+    },
+    "gpu": "NVIDIA A10, 23028 MiB, 570.148.08"
+  },
+  {
+    "ts": 1762643161243,
+    "batch_size": 8,
+    "metrics": {
+      "avg_latency": 1.0828424270239339,
+      "latencies": [
+        1.0753649849939393,
+        1.0752078469959088,
+        1.084829045998049,
+        1.0833240339998156,
+        1.0756171739922138,
+        1.0804949510056758,
+        1.0755817969911732,
+        1.0814458789973287,
+        1.0785311660001753,
+        1.0811755479953717,
+        1.077959636997548,
+        1.0830606929957867,
+        1.0824554639984854,
+        1.0797885159990983,
+        1.079573563998565,
+        1.0823909269965952,
+        1.0833210809942102,
+        1.0800957350002136,
+        1.0828027129900875,
+        1.0784814939979697,
+        1.0847630930074956,
+        1.0824554819992045,
+        1.083379852003418,
+        1.0825558419892332,
+        1.0851554580003722,
+        1.0866137130069546,
+        1.087192443999811,
+        1.08782460000657,
+        1.0821085079951445,
+        1.0865061759977834,
+        1.085009414004162,
+        1.0859964919945924,
+        1.0883602700050687,
+        1.0853779629978817,
+        1.0878696709987707,
+        1.0884344139922177,
+        1.0826141520083183,
+        1.086940606997814,
+        1.086489599008928,
+        1.0865470800054027
+      ],
+      "percentiles": {
+        "10": 1.0777253906970146,
+        "25": 1.0803951470043103,
+        "50": 1.082931702992937,
+        "75": 1.0861197687481763,
+        "90": 1.087255659600487,
+        "99": 1.0884054978372297
+      }
+    },
+    "meta": {
+      "python": "3.11.14",
+      "platform": "Linux-6.8.0-60-generic-x86_64-with-glibc2.35",
+      "system": {
+        "system": "Linux",
+        "machine": "x86_64",
+        "release": "6.8.0-60-generic",
+        "version": "#63~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Tue Apr 22 19:00:15 UTC 2",
+        "kernel": "6.8.0-60-generic",
+        "os_release": {
+          "PRETTY_NAME": "Ubuntu 22.04.5 LTS",
+          "NAME": "Ubuntu",
+          "VERSION_ID": "22.04",
+          "VERSION": "22.04.5 LTS (Jammy Jellyfish)",
+          "VERSION_CODENAME": "jammy",
+          "ID": "ubuntu",
+          "ID_LIKE": "debian",
+          "HOME_URL": "https://www.ubuntu.com/",
+          "SUPPORT_URL": "https://help.ubuntu.com/",
+          "BUG_REPORT_URL": "https://bugs.launchpad.net/ubuntu/",
+          "PRIVACY_POLICY_URL": "https://www.ubuntu.com/legal/terms-and-policies/privacy-policy",
+          "UBUNTU_CODENAME": "jammy"
+        }
+      },
+      "packages": {
+        "torch": "2.8.0+cu128",
+        "vllm": "0.11.0",
+        "transformers": "4.57.1"
+      },
+      "cuda": {
+        "nvidia_smi_cuda": "12.8",
+        "nvidia_driver": "570.148.08",
+        "torch_cuda": "12.8",
+        "cudnn": 91002,
+        "avail": true,
+        "device_count": 1
+      },
+      "cpu": {
+        "arch": "x86_64",
+        "count_logical": 30,
+        "model_name": "Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz",
+        "vendor_id": "GenuineIntel",
+        "sockets": "30",
+        "unique_core_ids": 1,
+        "cpus": "30",
+        "cores_per_socket": "1",
+        "threads_per_core": "1",
+        "l3_cache": "480 MiB (30 instances)",
+        "architecture": "x86_64"
+      },
+      "memory": {
+        "mem_total_kb": 232955528,
+        "mem_free_kb": 206218436,
+        "mem_available_kb": 227857856,
+        "swap_total_kb": 0
+      }
+    },
+    "gpu": "NVIDIA A10, 23028 MiB, 570.148.08"
   }
 ]
