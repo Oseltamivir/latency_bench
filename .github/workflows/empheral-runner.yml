@@ -24,6 +24,8 @@ jobs:
       NUM_ITERS: 5
       NUM_WARMUP: 2
       BS_LIST: "1 2 4 8"
+      GSM8K_FEWSHOT: "8"
+      GSM8K_LIMIT: "100"
       PAGES_BRANCH: gh-pages
 
     steps:
@@ -41,11 +43,14 @@ jobs:
           cache: 'pip'
           cache-dependency-path: 'requirements.bench.txt'
         
-      - run: |
+      - name: Create venv and install requirements (+ lm-eval)
+        run: |
           python -m venv ~/.venvs/vllm
           source ~/.venvs/vllm/bin/activate
           python -m pip install --upgrade pip
           pip install -r requirements.bench.txt
+          # New: lm-eval harness
+          pip install 'lm-eval>=0.4.0,<0.5'
 
       - name: Record GPU + env
         run: |
@@ -59,6 +64,19 @@ jobs:
               except Exception: pass
           open("results/env.json","w").write(json.dumps(info, indent=2))
           PY
+
+      - name: Capture config outputs
+        id: cfg
+        run: |
+          echo "model_id=$MODEL_ID" >> "$GITHUB_OUTPUT"
+          echo "input_len=$INPUT_LEN" >> "$GITHUB_OUTPUT"
+          echo "output_len=$OUTPUT_LEN" >> "$GITHUB_OUTPUT"
+          echo "bs_list=$BS_LIST" >> "$GITHUB_OUTPUT"
+
+      - name: Count GPUs
+        id: gpu_config
+        run: |
+          echo "gpu_count=$(nvidia-smi -L | wc -l | tr -d ' ')" >> "$GITHUB_OUTPUT"
 
       - name: Run latency bench (local)
         env:
@@ -78,6 +96,26 @@ jobs:
               --output-json "results/latency_bs${B}.json" | tee "results/latency_bs${B}.log"
           done
 
+      - name: Run GSM8K eval (lm-eval via vLLM)
+        env:
+          HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          source ~/.venvs/vllm/bin/activate
+          MAXLEN=$(( INPUT_LEN + OUTPUT_LEN + 64 ))
+          for B in ${BS_LIST}; do
+            echo "==> gsm8k bs=${B}"
+            python -m lm_eval \
+              --model vllm \
+              --model_args pretrained="${MODEL_ID}",dtype=auto,gpu_memory_utilization=0.9,max_model_len=${MAXLEN},trust_remote_code=True \
+              --tasks gsm8k \
+              --num_fewshot "${GSM8K_FEWSHOT}" \
+              --limit "${GSM8K_LIMIT}" \
+              --batch_size "${B}" \
+              --output_path "results/gsm8k_bs${B}.json" \
+              --log_samples "results/gsm8k_bs${B}_samples.json" | tee "results/gsm8k_bs${B}.log"
+          done
+
       - name: Upload artifacts (JSON + logs + env)
         uses: actions/upload-artifact@v4
         with:
@@ -85,6 +123,8 @@ jobs:
           path: |
             results/latency_bs*.json
             results/latency_bs*.log
+            results/gsm8k_bs*.json
+            results/gsm8k_bs*.log
             results/env.json
             results/gpu.txt
           if-no-files-found: error
@@ -93,8 +133,12 @@ jobs:
         shell: bash
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import glob, json, os
-          def to_ms(x): return (x*1000.0 if x is not None and x < 50 else x)
+          import glob, json, os, os.path
+
+          def to_ms(x): 
+              return (x*1000.0 if isinstance(x,(int,float)) and x < 50 else x)
+
+          # --- Latency table ---
           files = sorted(glob.glob("results/latency_bs*.json"))
           rows = []
           for f in files:
@@ -109,6 +153,25 @@ jobs:
           for bs,avg,p10,p25,p50,p75,p90,p99 in rows:
               fm = lambda x: ("" if x is None else f"{x:.1f}")
               print(f"| {bs} | {fm(avg)} | {fm(p10)} | {fm(p25)} | {fm(p50)} | {fm(p75)} | {fm(p90)} | {fm(p99)} |")
+
+          # --- GSM8K table ---
+          gfiles = sorted(glob.glob("results/gsm8k_bs*.json"))
+          if gfiles:
+              print("\n## GSM8K (lm-eval)\n")
+              print("| Batch | Acc | Acc_norm |")
+              print("|---:|---:|---:|")
+              for f in gfiles:
+                  d = json.load(open(f))
+                  bs = int(os.path.basename(f).split("bs")[1].split(".")[0])
+                  # Harness usually stores under results['gsm8k']
+                  res = {}
+                  if isinstance(d.get("results"), dict):
+                      res = d["results"].get("gsm8k", d["results"])
+                  acc = res.get("acc") or res.get("exact_match") or res.get("em")
+                  accn = res.get("acc_norm")
+                  def fmt(x): 
+                      return "" if x is None else (f"{x:.4f}" if isinstance(x,(int,float)) else str(x))
+                  print(f"| {bs} | {fmt(acc)} | {fmt(accn)} |")
           PY
 
       - name: Update GitHub Pages data only
@@ -126,25 +189,38 @@ jobs:
           fi
           mkdir -p docs/data
           [ -f docs/data/latency_history.json ] || echo "[]" > docs/data/latency_history.json
+          # New: initialize gsm8k history file
+          [ -f docs/data/gsm8k_history.json ] || echo "[]" > docs/data/gsm8k_history.json
+
           cp -r _results_tmp results
           python - <<'PY'
           import glob, json, os, time
           ts = int(time.time()*1000)
           hist_path = "docs/data/latency_history.json"
+          gsm_path  = "docs/data/gsm8k_history.json"
           hist = json.load(open(hist_path))
+          gsm  = json.load(open(gsm_path))
           meta = json.load(open("results/env.json"))
           gpu = open("results/gpu.txt").read().strip() if os.path.exists("results/gpu.txt") else ""
+
           for f in sorted(glob.glob("results/latency_bs*.json")):
               d = json.load(open(f))
               if "percentiles" not in d: d["percentiles"] = {}
               bs = int(os.path.basename(f).split("bs")[1].split(".")[0])
               hist.append({"ts": ts, "batch_size": bs, "metrics": d, "meta": meta, "gpu": gpu})
+
+          for f in sorted(glob.glob("results/gsm8k_bs*.json")):
+              d = json.load(open(f))
+              bs = int(os.path.basename(f).split("bs")[1].split(".")[0])
+              gsm.append({"ts": ts, "batch_size": bs, "metrics": d, "meta": meta, "gpu": gpu})
+
           open(hist_path, "w").write(json.dumps(hist, indent=2))
+          open(gsm_path,  "w").write(json.dumps(gsm,  indent=2))
           PY
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/data
-          git commit -m "bench: append latency data [skip ci]" || echo "No data changes"
+          git commit -m "bench: append latency + gsm8k data [skip ci]" || echo "No data changes"
           git push origin $PAGES_BRANCH
 
       - name: Notify Slack (success/failure)
