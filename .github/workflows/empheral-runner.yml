@@ -21,11 +21,11 @@ jobs:
       MODEL_ID: unsloth/Llama-3.2-1B-Instruct
       INPUT_LEN: 512
       OUTPUT_LEN: 128
-      NUM_ITERS: 10
+      NUM_ITERS: 20
       NUM_WARMUP: 5
       BS_LIST: "2 4 8"
       GSM8K_FEWSHOT: "8"
-      GSM8K_LIMIT: "400"
+      GSM8K_LIMIT: "800"
       PAGES_BRANCH: gh-pages
 
     steps:
