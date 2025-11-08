@@ -132,88 +132,7 @@ jobs:
       - name: Add markdown table to Job Summary
         shell: bash
         run: |
-          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import glob, json, os, re
-
-          def to_ms(x):
-              return (x*1000.0 if isinstance(x,(int,float)) and x < 50 else x)
-
-          # ---------- Latency table ----------
-          files = sorted(glob.glob("results/latency_bs*.json"))
-          rows = []
-          for f in files:
-              d = json.load(open(f))
-              m = re.search(r'bs(\d+)', os.path.basename(f))
-              if not m: 
-                  continue
-              bs = int(m.group(1))
-              avg = to_ms(d.get("avg_latency"))
-              p = d.get("percentiles", {}) or {}
-              rows.append((bs, avg, *(to_ms(p.get(k)) for k in ("10","25","50","75","90","99"))))
-
-          print("## vLLM Latency — Llama 1B\n")
-          print("| Batch | Avg (ms) | P10 | P25 | P50 | P75 | P90 | P99 |")
-          print("|---:|---:|---:|---:|---:|---:|---:|---:|")
-          for bs,avg,p10,p25,p50,p75,p90,p99 in sorted(rows):
-              fm = lambda x: ("" if x is None else f"{x:.1f}")
-              print(f"| {bs} | {fm(avg)} | {fm(p10)} | {fm(p25)} | {fm(p50)} | {fm(p75)} | {fm(p90)} | {fm(p99)} |")
-
-          # ---------- GSM8K (lm-eval) ----------
-          # v0.4.x writes results under: results/gsm8k_bsX/<sanitized_model>/results_*.json
-          paths = sorted(glob.glob("results/gsm8k_bs*/**/results_*.json", recursive=True))
-
-          # Fallback to older/flat naming if present:
-          if not paths:
-              for ddir in sorted(glob.glob("results/gsm8k_bs*")):
-                  cand = [os.path.join(ddir, n) for n in ("eval_results.json","results.json","metrics.json")]
-                  paths.extend([p for p in cand if os.path.exists(p)])
-
-          # Keep latest (by mtime) per batch size
-          by_bs = {}
-          for p in paths:
-              m = re.search(r"gsm8k_bs(\d+)", p)
-              if not m:
-                  continue
-              bs = int(m.group(1))
-              mt = os.path.getmtime(p)
-              if (bs not in by_bs) or (mt > by_bs[bs][0]):
-                  by_bs[bs] = (mt, p)
-
-          def extract_scores(d):
-              # Get the gsm8k metrics dict across formats
-              res = d.get("results", {})
-              if isinstance(res, dict) and "gsm8k" in res and isinstance(res["gsm8k"], dict):
-                  g = res["gsm8k"]
-              elif isinstance(res, dict):
-                  g = res  # older single-task dumps
-              else:
-                  g = {}
-
-              # Prefer explicit strict/flex if present; fall back to plain exact_match/acc
-              strict = g.get("exact_match,strict-match") or g.get("exact_match_strict") or g.get("em_strict")
-              flex   = g.get("exact_match,flexible-extract") or g.get("exact_match") or g.get("acc")
-
-              # Effective sample count if available
-              n_eff = None
-              ns = d.get("n-samples") or d.get("n_samples")
-              if isinstance(ns, dict):
-                  ge = ns.get("gsm8k")
-                  if isinstance(ge, dict):
-                      n_eff = ge.get("effective") or ge.get("n_effective") or ge.get("n")
-              return strict, flex, n_eff
-
-          if by_bs:
-              print("\n## GSM8K (lm-eval)\n")
-              print("| Batch | EM (strict) | EM (flex) | n(eff) |")
-              print("|---:|---:|---:|---:|")
-              for bs, (_, p) in sorted(by_bs.items()):
-                  d = json.load(open(p))
-                  strict, flex, n_eff = extract_scores(d)
-                  fmt = lambda x: "" if x is None else (f"{x:.4f}" if isinstance(x,(int,float)) else str(x))
-                  print(f"| {bs} | {fmt(strict)} | {fmt(flex)} | {fmt(n_eff)} |")
-          else:
-              print("\n_**No gsm8k JSON results found**_\n")
-          PY
+          python scripts/collect_results.py summary --results-dir results --out "$GITHUB_STEP_SUMMARY"
 
       - name: Update GitHub Pages data only
         run: |
@@ -235,52 +154,10 @@ jobs:
 
           cp -r _results_tmp results
           
-          python - <<'PY'
-          import glob, json, os, time, re
-
-          ts = int(time.time()*1000)
-          hist_path = "docs/data/latency_history.json"
-          gsm_path  = "docs/data/gsm8k_history.json"
-
-          # Load existing histories (files already created in the shell before this block)
-          hist = json.load(open(hist_path))
-          gsm  = json.load(open(gsm_path))
-          meta = json.load(open("results/env.json"))
-          gpu = open("results/gpu.txt").read().strip() if os.path.exists("results/gpu.txt") else ""
-
-          # ---- Latency history (JSON files) ----
-          for f in sorted(glob.glob("results/latency_bs*.json")):
-              d = json.load(open(f))
-              d.setdefault("percentiles", {})
-              m = re.search(r'bs(\d+)', os.path.basename(f))
-              if not m:
-                  continue
-              bs = int(m.group(1))
-              hist.append({"ts": ts, "batch_size": bs, "metrics": d, "meta": meta, "gpu": gpu})
-
-          # ---- GSM8K history (directories only) ----
-          for ddir in sorted(glob.glob("results/gsm8k_bs*")):
-              if not os.path.isdir(ddir):
-                  continue  # skip .log files like gsm8k_bs1.log
-              # normalize and extract trailing bs number (e.g., gsm8k_bs8)
-              base = os.path.basename(os.path.normpath(ddir))
-              m = re.search(r'bs(\d+)$', base)
-              if not m:
-                  continue
-              bs = int(m.group(1))
-
-              # find a result file we can read
-              for rpath in sorted(glob.glob("results/gsm8k_bs*/**/results_*.json", recursive=True)):
-                m = re.search(r"gsm8k_bs(\d+)", rpath)
-                if not m: 
-                    continue
-                bs = int(m.group(1))
-                d  = json.load(open(rpath))
-                gsm.append({"ts": ts, "batch_size": bs, "metrics": d, "meta": meta, "gpu": gpu})
-
-          open(hist_path, "w").write(json.dumps(hist, indent=2))
-          open(gsm_path,  "w").write(json.dumps(gsm,  indent=2))
-          PY
+          python scripts/collect_results.py append-history \
+            --results-dir results \
+            --hist-path docs/data/latency_history.json \
+            --gsm-path  docs/data/gsm8k_history.json
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
