@@ -200,34 +200,53 @@ jobs:
           [ -f docs/data/gsm8k_history.json ] || echo "[]" > docs/data/gsm8k_history.json
 
           cp -r _results_tmp results
+          
           python - <<'PY'
-          import glob, json, os, time
+          import glob, json, os, time, re
+
           ts = int(time.time()*1000)
           hist_path = "docs/data/latency_history.json"
           gsm_path  = "docs/data/gsm8k_history.json"
+
+          # Load existing histories (files already created in the shell before this block)
           hist = json.load(open(hist_path))
           gsm  = json.load(open(gsm_path))
           meta = json.load(open("results/env.json"))
           gpu = open("results/gpu.txt").read().strip() if os.path.exists("results/gpu.txt") else ""
 
+          # ---- Latency history (JSON files) ----
           for f in sorted(glob.glob("results/latency_bs*.json")):
               d = json.load(open(f))
-              if "percentiles" not in d: d["percentiles"] = {}
-              bs = int(os.path.basename(f).split("bs")[1].split(".")[0])
+              d.setdefault("percentiles", {})
+              m = re.search(r'bs(\d+)', os.path.basename(f))
+              if not m:
+                  continue
+              bs = int(m.group(1))
               hist.append({"ts": ts, "batch_size": bs, "metrics": d, "meta": meta, "gpu": gpu})
 
-          import os
+          # ---- GSM8K history (directories only) ----
           for ddir in sorted(glob.glob("results/gsm8k_bs*")):
-              bs = int(os.path.basename(ddir).split("bs")[1])
-              cand = [os.path.join(ddir, n) for n in ("eval_results.json","results.json","metrics.json")]
-              rpath = next((p for p in cand if os.path.exists(p)), None)
-              if not rpath: 
+              if not os.path.isdir(ddir):
+                  continue  # skip .log files like gsm8k_bs1.log
+              # normalize and extract trailing bs number (e.g., gsm8k_bs8)
+              base = os.path.basename(os.path.normpath(ddir))
+              m = re.search(r'bs(\d+)$', base)
+              if not m:
                   continue
-              d = json.load(open(rpath))
-              gsm.append({"ts": ts, "batch_size": bs, "metrics": d, "meta": meta, "gpu": gpu})
+              bs = int(m.group(1))
+
+              # find a result file we can read
+              for name in ("eval_results.json", "results.json", "metrics.json"):
+                  rpath = os.path.join(ddir, name)
+                  if os.path.exists(rpath):
+                      d = json.load(open(rpath))
+                      gsm.append({"ts": ts, "batch_size": bs, "metrics": d, "meta": meta, "gpu": gpu})
+                      break
+
           open(hist_path, "w").write(json.dumps(hist, indent=2))
           open(gsm_path,  "w").write(json.dumps(gsm,  indent=2))
           PY
+
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/data
