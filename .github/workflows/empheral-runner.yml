@@ -124,7 +124,6 @@ jobs:
             results/latency_bs*.json
             results/latency_bs*.log
             results/gsm8k_bs*/**/results_*.json
-            results/gsm8k_bs*/**/samples_*.jsonl
             results/gsm8k_bs*.log
             results/env.json
             results/gpu.txt
@@ -236,12 +235,13 @@ jobs:
               bs = int(m.group(1))
 
               # find a result file we can read
-              for name in ("eval_results.json", "results.json", "metrics.json"):
-                  rpath = os.path.join(ddir, name)
-                  if os.path.exists(rpath):
-                      d = json.load(open(rpath))
-                      gsm.append({"ts": ts, "batch_size": bs, "metrics": d, "meta": meta, "gpu": gpu})
-                      break
+              for rpath in sorted(glob.glob("results/gsm8k_bs*/**/results_*.json", recursive=True)):
+                m = re.search(r"gsm8k_bs(\d+)", rpath)
+                if not m: 
+                    continue
+                bs = int(m.group(1))
+                d  = json.load(open(rpath))
+                gsm.append({"ts": ts, "batch_size": bs, "metrics": d, "meta": meta, "gpu": gpu})
 
           open(hist_path, "w").write(json.dumps(hist, indent=2))
           open(gsm_path,  "w").write(json.dumps(gsm,  indent=2))
