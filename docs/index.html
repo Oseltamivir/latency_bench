@@ -44,6 +44,7 @@
       padding:12px 12px 4px;
     }
     #chart{width:100%;height:560px}
+    #gsm8kChart{width:100%;height:420px}
     p.muted{color:var(--muted);margin-top:4px}
   </style>
 </head>
@@ -57,6 +58,15 @@
       Each point shows a <strong>distribution</strong> of per-iteration latencies for a run; an <em>Avg ms</em> line overlays the trend per batch size.
     </p>
     <div class="chart-wrap"><div id="chart"></div></div>
+
+    <header style="margin-top:28px">
+      <h1>GSM8K Accuracy — Llama 8B (TP=2)</h1>
+      <a class="muted" href="./data/gsm8k_history.json">raw JSON</a>
+    </header>
+    <p class="muted">
+      Exact-match accuracy per run, grouped by batch size (strict match shown; flexible extract in hover).
+    </p>
+    <div class="chart-wrap"><div id="gsm8kChart"></div></div>
   </div>
 
   <script>
@@ -86,6 +96,12 @@
     async function loadHist(){
       const r = await fetch('./data/latency_history.json', {cache:'no-store'});
       if (!r.ok) throw new Error('Failed to load latency_history.json');
+      return await r.json();
+    }
+
+    async function loadGsm8k(){
+      const r = await fetch('./data/gsm8k_history.json', {cache:'no-store'});
+      if (!r.ok) throw new Error('Failed to load gsm8k_history.json');
       return await r.json();
     }
 
@@ -231,12 +247,97 @@
       return { traces, layout };
     }
 
+    function buildGsm8k(labelsOrdered, hist){
+      // Group results by batch size
+      const byBS = new Map();
+      for (const r of hist){
+        const bs = r.batch_size;
+        const lbl = tsLabel(r.ts);
+        const res = r.metrics?.results?.gsm8k || {};
+        const strict = res["exact_match,strict-match"];
+        const flex = res["exact_match,flexible-extract"];
+        if (!byBS.has(bs)) byBS.set(bs, { x: [], y: [], flex: [] });
+        byBS.get(bs).x.push(lbl);
+        byBS.get(bs).y.push(strict);
+        byBS.get(bs).flex.push(flex);
+      }
+
+      const traces = [];
+      for (const [bs, obj] of byBS.entries()){
+        const color = paletteByBS(bs);
+        // Visible line is strict-match EM; hover shows both
+        traces.push({
+          type: 'scatter',
+          mode: 'lines+markers',
+          name: `bs=${bs}`,
+          x: obj.x,
+          y: obj.y,
+          line: {color, width:2},
+          marker: {color, size:6},
+          customdata: obj.flex,
+          hovertemplate:
+            `bs=${bs}<br>%{x}`+
+            '<br>EM (strict): %{y:.1%}'+
+            '<br>EM (flex): %{customdata:.1%}<extra></extra>',
+          legendgroup: String(bs),
+        });
+      }
+
+      const categoryArray = Array.from(new Set(labelsOrdered)).sort();
+      const layout = {
+        margin: {l:70,r:110,t:10,b:64},
+        font: {family:'DM Sans, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif', size:13, color: theme.fg},
+        paper_bgcolor: theme.bg,
+        plot_bgcolor: theme.bg,
+        xaxis: {
+          title: {text:'Run timestamp', font:{size:13, color: theme.axis}},
+          type:'category',
+          categoryorder:'array',
+          categoryarray: categoryArray,
+          tickangle:-20,
+          tickfont:{color: theme.axis},
+          gridcolor: theme.grid,
+          zeroline:false,
+        },
+        yaxis: {
+          title: {text:'GSM8K EM', font:{size:13, color: theme.axis}},
+          tickformat: '.0%',
+          tickfont:{color: theme.axis},
+          gridcolor: theme.grid,
+          rangemode: 'tozero',
+          zeroline:false,
+        },
+        legend: {
+          orientation:'v', x:1.02, y:0.5, xanchor:'left', yanchor:'middle',
+          font:{size:13, color: theme.fg},
+          bgcolor:'rgba(0,0,0,0)',
+          borderwidth:0,
+          itemwidth: 50
+        },
+        hovermode: 'closest',
+        hoverlabel: {
+          bgcolor:'#111827',
+          bordercolor:'#374151',
+          font:{family:'DM Sans, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif', size:12, color:'#e5e7eb'},
+          namelength: -1
+        }
+      };
+      return { traces, layout };
+    }
+
     // ---------- Run ----------
     (async ()=>{
-      const hist = await loadHist();
-      const labelOrder = hist.map(r => tsLabel(r.ts));
-      const { traces, layout } = build(labelOrder, hist);
+      const [latHist, gsmHist] = await Promise.all([loadHist(), loadGsm8k()]);
+
+      // Latency chart
+      const labelOrder = latHist.map(r => tsLabel(r.ts));
+      const { traces, layout } = build(labelOrder, latHist);
       Plotly.react(document.getElementById('chart'), traces, layout, {responsive:true, displayModeBar:false});
+
+      // GSM8K chart
+      const gsmLabelOrder = gsmHist.map(r => tsLabel(r.ts));
+      const { traces: gTraces, layout: gLayout } = buildGsm8k(gsmLabelOrder, gsmHist);
+      Plotly.react(document.getElementById('gsm8kChart'), gTraces, gLayout, {responsive:true, displayModeBar:false});
     })();
   </script>
 </body>
