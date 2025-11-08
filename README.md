@@ -1,4 +1,7 @@
 This repo consists of autoamted benchmarks with GPU access through lambda labs.
+
+Listed below are the goals. 
+
 ### **Goal 1**: Github Action that runs every hour and benchmark latency on vllm Llama 8B
 - ✅ Due to limited instances, I have used Llama3.2-1B instead. To save time, I've removed the BS=1 run.
 - 3 Different workflows
@@ -51,3 +54,8 @@ This repo consists of autoamted benchmarks with GPU access through lambda labs.
 
 #### Stretch goal 4: gsm8K via lm-eval
 - ✅ Done, summary + plots are show above.
+
+---
+
+Some additional notes:
+- Secrets are stored in Github. They are encrypted at rest and are only injected them at job runtime. They’re also masked in logs when printed verbatim.
