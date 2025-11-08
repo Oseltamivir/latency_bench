@@ -38,7 +38,8 @@ def _find_latency_files(results_dir: str) -> List[str]:
 
 
 def _parse_bs_from_path(path: str) -> Optional[int]:
-    m = re.search(r"bs(\d+)", os.path.basename(path))
+    # Look anywhere in the path to handle nested gsm8k_bs*/.../results.json
+    m = re.search(r"bs(\d+)", path)
     return int(m.group(1)) if m else None
 
 
@@ -62,22 +63,36 @@ def _collect_latency_rows(results_dir: str) -> List[Tuple[int, Optional[float], 
 
 
 def _find_gsm_result_paths(results_dir: str) -> List[str]:
-    # Primary: lm-eval v0.4.x nested results like results/gsm8k_bsX/<sanitized_model>/results_*.json
-    nested = sorted(
-        glob.glob(os.path.join(results_dir, "gsm8k_bs*/**/results_*.json"), recursive=True)
-    )
-    if nested:
-        return nested
+    """Find lm-eval GSM8K results across common layouts and filenames.
 
-    # Fallbacks: older/flat naming inside each gsm8k_bs* directory
-    paths: List[str] = []
+    Handles both nested and flat outputs, and multiple result filenames:
+    - results_*.json (newer runs)
+    - results.json, eval_results.json, metrics.json (older or alt layouts)
+    """
+    patterns = [
+        "gsm8k_bs*/**/results_*.json",
+        "gsm8k_bs*/**/results.json",
+        "gsm8k_bs*/**/eval_results.json",
+        "gsm8k_bs*/**/metrics.json",
+    ]
+    found: List[str] = []
+    for pat in patterns:
+        found.extend(
+            glob.glob(os.path.join(results_dir, pat), recursive=True)
+        )
+
+    if found:
+        # De-duplicate and sort for stability
+        return sorted(set(found))
+
+    # As a final fallback, check only the immediate gsm8k_bs* dirs (non-recursive)
+    flat: List[str] = []
     for ddir in sorted(glob.glob(os.path.join(results_dir, "gsm8k_bs*"))):
-        cand = [
-            os.path.join(ddir, n)
-            for n in ("eval_results.json", "results.json", "metrics.json")
-        ]
-        paths.extend([p for p in cand if os.path.exists(p)])
-    return sorted(paths)
+        for n in ("eval_results.json", "results.json", "metrics.json"):
+            p = os.path.join(ddir, n)
+            if os.path.exists(p):
+                flat.append(p)
+    return sorted(set(flat))
 
 
 def _latest_gsm_by_bs(results_dir: str) -> Dict[int, str]:
@@ -253,4 +268,3 @@ def main(argv: List[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
