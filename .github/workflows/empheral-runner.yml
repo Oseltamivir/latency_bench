@@ -54,16 +54,20 @@ jobs:
 
       - name: Record GPU + env
         run: |
+          set -euo pipefail
           mkdir -p results
-          nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | tee results/gpu.txt
-          python - <<'PY'
-          import json, platform, sys, importlib
-          info={"python":sys.version.split()[0],"torch":None,"vllm":None,"platform":platform.platform()}
-          for m in ("torch","vllm"):
-              try: info[m]=importlib.import_module(m).__version__
-              except Exception: pass
-          open("results/env.json","w").write(json.dumps(info, indent=2))
-          PY
+
+          # GPU quick summary (human-readable)
+          if command -v nvidia-smi >/dev/null 2>&1; then
+            nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | tee results/gpu.txt
+          else
+            echo "nvidia-smi not found" | tee results/gpu.txt
+          fi
+
+          # Use the same Python env as the bench to capture correct package versions
+          source ~/.venvs/vllm/bin/activate
+          python scripts/record_metrics.py
+
 
       - name: Capture config outputs
         id: cfg
@@ -127,6 +131,8 @@ jobs:
             results/gsm8k_bs*.log
             results/env.json
             results/gpu.txt
+            results/gpu.json
+            results/cpu.json
           if-no-files-found: error
 
       - name: Add markdown table to Job Summary
