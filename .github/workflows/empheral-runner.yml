@@ -112,8 +112,8 @@ jobs:
               --num_fewshot "${GSM8K_FEWSHOT}" \
               --limit "${GSM8K_LIMIT}" \
               --batch_size "${B}" \
-              --output_path "results/gsm8k_bs${B}.json" \
-              --log_samples "results/gsm8k_bs${B}_samples.json" | tee "results/gsm8k_bs${B}.log"
+              --output_path "results/gsm8k_bs${B}" \
+              --log_samples | tee "results/gsm8k_bs${B}.log"
           done
 
       - name: Upload artifacts (JSON + logs + env)
@@ -123,7 +123,8 @@ jobs:
           path: |
             results/latency_bs*.json
             results/latency_bs*.log
-            results/gsm8k_bs*.json
+            results/gsm8k_bs*/eval_results.json
+            results/gsm8k_bs*/samples.jsonl
             results/gsm8k_bs*.log
             results/env.json
             results/gpu.txt
@@ -155,18 +156,24 @@ jobs:
               print(f"| {bs} | {fm(avg)} | {fm(p10)} | {fm(p25)} | {fm(p50)} | {fm(p75)} | {fm(p90)} | {fm(p99)} |")
 
           # --- GSM8K table ---
-          gfiles = sorted(glob.glob("results/gsm8k_bs*.json"))
-          if gfiles:
+          import os
+          gdirs = sorted(glob.glob("results/gsm8k_bs*"))
+          if gdirs:
               print("\n## GSM8K (lm-eval)\n")
               print("| Batch | Acc | Acc_norm |")
               print("|---:|---:|---:|")
-              for f in gfiles:
-                  d = json.load(open(f))
-                  bs = int(os.path.basename(f).split("bs")[1].split(".")[0])
-                  # Harness usually stores under results['gsm8k']
-                  res = {}
-                  if isinstance(d.get("results"), dict):
-                      res = d["results"].get("gsm8k", d["results"])
+              for ddir in gdirs:
+                  bs = int(os.path.basename(ddir).split("bs")[1])
+                  # find result file name robustly
+                  cand = [os.path.join(ddir, n) for n in ("eval_results.json","results.json","metrics.json")]
+                  rpath = next((p for p in cand if os.path.exists(p)), None)
+                  if not rpath: 
+                      continue
+                  d = json.load(open(rpath))
+                  # common locations
+                  res = d.get("results", {})
+                  if isinstance(res, dict) and "gsm8k" in res:
+                      res = res["gsm8k"]
                   acc = res.get("acc") or res.get("exact_match") or res.get("em")
                   accn = res.get("acc_norm")
                   def fmt(x): 
@@ -209,11 +216,15 @@ jobs:
               bs = int(os.path.basename(f).split("bs")[1].split(".")[0])
               hist.append({"ts": ts, "batch_size": bs, "metrics": d, "meta": meta, "gpu": gpu})
 
-          for f in sorted(glob.glob("results/gsm8k_bs*.json")):
-              d = json.load(open(f))
-              bs = int(os.path.basename(f).split("bs")[1].split(".")[0])
+          import os
+          for ddir in sorted(glob.glob("results/gsm8k_bs*")):
+              bs = int(os.path.basename(ddir).split("bs")[1])
+              cand = [os.path.join(ddir, n) for n in ("eval_results.json","results.json","metrics.json")]
+              rpath = next((p for p in cand if os.path.exists(p)), None)
+              if not rpath: 
+                  continue
+              d = json.load(open(rpath))
               gsm.append({"ts": ts, "batch_size": bs, "metrics": d, "meta": meta, "gpu": gpu})
-
           open(hist_path, "w").write(json.dumps(hist, indent=2))
           open(gsm_path,  "w").write(json.dumps(gsm,  indent=2))
           PY
