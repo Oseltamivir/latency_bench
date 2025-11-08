@@ -12,7 +12,7 @@ This repo consists of autoamted benchmarks with GPU access through lambda labs.
         <img src="pics/manual_workflow.png" width=50% height=50%>
 
     - ### [Self-hosted vLLM Latency](.github/workflows/empheral-runner.yml)
-        - Uses an already running instance as a github self hosted runner.
+        - Uses an already running instance as a github self hosted runner. [This script](startup.sh) needs to be run to set up the instance as a self hosted runner.
 
         <img src="pics/runner.png" width=80% height=80%>
     - All workflows follow up the benchmark with:
