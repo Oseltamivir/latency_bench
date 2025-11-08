@@ -123,8 +123,8 @@ jobs:
           path: |
             results/latency_bs*.json
             results/latency_bs*.log
-            results/gsm8k_bs*/eval_results.json
-            results/gsm8k_bs*/samples.jsonl
+            results/gsm8k_bs*/**/results_*.json
+            results/gsm8k_bs*/**/samples_*.jsonl
             results/gsm8k_bs*.log
             results/env.json
             results/gpu.txt
