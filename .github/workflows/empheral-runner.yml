@@ -133,51 +133,86 @@ jobs:
         shell: bash
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import glob, json, os, os.path
+          import glob, json, os, re
 
-          def to_ms(x): 
+          def to_ms(x):
               return (x*1000.0 if isinstance(x,(int,float)) and x < 50 else x)
 
-          # --- Latency table ---
+          # ---------- Latency table ----------
           files = sorted(glob.glob("results/latency_bs*.json"))
           rows = []
           for f in files:
               d = json.load(open(f))
-              bs = int(os.path.basename(f).split("bs")[1].split(".")[0])
+              m = re.search(r'bs(\d+)', os.path.basename(f))
+              if not m: 
+                  continue
+              bs = int(m.group(1))
               avg = to_ms(d.get("avg_latency"))
-              p = d.get("percentiles", {})
+              p = d.get("percentiles", {}) or {}
               rows.append((bs, avg, *(to_ms(p.get(k)) for k in ("10","25","50","75","90","99"))))
+
           print("## vLLM Latency — Llama 1B\n")
           print("| Batch | Avg (ms) | P10 | P25 | P50 | P75 | P90 | P99 |")
           print("|---:|---:|---:|---:|---:|---:|---:|---:|")
-          for bs,avg,p10,p25,p50,p75,p90,p99 in rows:
+          for bs,avg,p10,p25,p50,p75,p90,p99 in sorted(rows):
               fm = lambda x: ("" if x is None else f"{x:.1f}")
               print(f"| {bs} | {fm(avg)} | {fm(p10)} | {fm(p25)} | {fm(p50)} | {fm(p75)} | {fm(p90)} | {fm(p99)} |")
 
-          # --- GSM8K table ---
-          import os
-          gdirs = sorted([d for d in glob.glob("results/gsm8k_bs*") if os.path.isdir(d)])
-          if gdirs:
-              print("\n## GSM8K (lm-eval)\n")
-              print("| Batch | Acc | Acc_norm |")
-              print("|---:|---:|---:|")
-              for ddir in gdirs:
-                  bs = int(os.path.basename(ddir).split("bs")[1])
-                  # find result file name robustly
+          # ---------- GSM8K (lm-eval) ----------
+          # v0.4.x writes results under: results/gsm8k_bsX/<sanitized_model>/results_*.json
+          paths = sorted(glob.glob("results/gsm8k_bs*/**/results_*.json", recursive=True))
+
+          # Fallback to older/flat naming if present:
+          if not paths:
+              for ddir in sorted(glob.glob("results/gsm8k_bs*")):
                   cand = [os.path.join(ddir, n) for n in ("eval_results.json","results.json","metrics.json")]
-                  rpath = next((p for p in cand if os.path.exists(p)), None)
-                  if not rpath: 
-                      continue
-                  d = json.load(open(rpath))
-                  # common locations
-                  res = d.get("results", {})
-                  if isinstance(res, dict) and "gsm8k" in res:
-                      res = res["gsm8k"]
-                  acc = res.get("acc") or res.get("exact_match") or res.get("em")
-                  accn = res.get("acc_norm")
-                  def fmt(x): 
-                      return "" if x is None else (f"{x:.4f}" if isinstance(x,(int,float)) else str(x))
-                  print(f"| {bs} | {fmt(acc)} | {fmt(accn)} |")
+                  paths.extend([p for p in cand if os.path.exists(p)])
+
+          # Keep latest (by mtime) per batch size
+          by_bs = {}
+          for p in paths:
+              m = re.search(r"gsm8k_bs(\d+)", p)
+              if not m:
+                  continue
+              bs = int(m.group(1))
+              mt = os.path.getmtime(p)
+              if (bs not in by_bs) or (mt > by_bs[bs][0]):
+                  by_bs[bs] = (mt, p)
+
+          def extract_scores(d):
+              # Get the gsm8k metrics dict across formats
+              res = d.get("results", {})
+              if isinstance(res, dict) and "gsm8k" in res and isinstance(res["gsm8k"], dict):
+                  g = res["gsm8k"]
+              elif isinstance(res, dict):
+                  g = res  # older single-task dumps
+              else:
+                  g = {}
+
+              # Prefer explicit strict/flex if present; fall back to plain exact_match/acc
+              strict = g.get("exact_match,strict-match") or g.get("exact_match_strict") or g.get("em_strict")
+              flex   = g.get("exact_match,flexible-extract") or g.get("exact_match") or g.get("acc")
+
+              # Effective sample count if available
+              n_eff = None
+              ns = d.get("n-samples") or d.get("n_samples")
+              if isinstance(ns, dict):
+                  ge = ns.get("gsm8k")
+                  if isinstance(ge, dict):
+                      n_eff = ge.get("effective") or ge.get("n_effective") or ge.get("n")
+              return strict, flex, n_eff
+
+          if by_bs:
+              print("\n## GSM8K (lm-eval)\n")
+              print("| Batch | EM (strict) | EM (flex) | n(eff) |")
+              print("|---:|---:|---:|---:|")
+              for bs, (_, p) in sorted(by_bs.items()):
+                  d = json.load(open(p))
+                  strict, flex, n_eff = extract_scores(d)
+                  fmt = lambda x: "" if x is None else (f"{x:.4f}" if isinstance(x,(int,float)) else str(x))
+                  print(f"| {bs} | {fmt(strict)} | {fmt(flex)} | {fmt(n_eff)} |")
+          else:
+              print("\n_**No gsm8k JSON results found**_\n")
           PY
 
       - name: Update GitHub Pages data only
