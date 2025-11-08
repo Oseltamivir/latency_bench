@@ -37,14 +37,15 @@ jobs:
       - name: Python venv + deps (cached)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: 'requirements.bench.txt'
+        
       - run: |
-          python3 -m venv ~/.venvs/vllm
+          python -m venv ~/.venvs/vllm
           source ~/.venvs/vllm/bin/activate
           python -m pip install --upgrade pip
-          export HF_HUB_ENABLE_HF_TRANSFER=1 TRANSFORMERS_NO_TF=1 TRANSFORMERS_NO_FLAX=1 PYTHONNOUSERSITE=1
-          pip install "vllm[bench]>=0.10.0" hf_transfer
+          pip install -r requirements.bench.txt
 
       - name: Record GPU + env
         run: |
@@ -69,7 +70,6 @@ jobs:
             echo "==> bench bs=${B}"
             vllm bench latency \
               --model "${MODEL_ID}" \
-              --tensor-parallel-size "${TP_SIZE}" \
               --batch-size "${B}" \
               --input-len "${INPUT_LEN}" \
               --output-len "${OUTPUT_LEN}" \
@@ -103,7 +103,7 @@ jobs:
               avg = to_ms(d.get("avg_latency"))
               p = d.get("percentiles", {})
               rows.append((bs, avg, *(to_ms(p.get(k)) for k in ("10","25","50","75","90","99"))))
-          print("## vLLM Latency — Llama 8B (TP=${{ env.TP_SIZE }})\n")
+          print("## vLLM Latency — Llama 1B\n")
           print("| Batch | Avg (ms) | P10 | P25 | P50 | P75 | P90 | P99 |")
           print("|---:|---:|---:|---:|---:|---:|---:|---:|")
           for bs,avg,p10,p25,p50,p75,p90,p99 in rows:
