@@ -176,8 +176,6 @@ def generate_summary_markdown(results_dir: str) -> str:
 
 
 def append_history(results_dir: str, hist_path: str, gsm_path: str) -> None:
-    ts = int(time.time() * 1000)
-
     # Ensure parent dirs exist
     os.makedirs(os.path.dirname(hist_path), exist_ok=True)
     os.makedirs(os.path.dirname(gsm_path), exist_ok=True)
@@ -186,6 +184,8 @@ def append_history(results_dir: str, hist_path: str, gsm_path: str) -> None:
     gsm = _read_json_safe(gsm_path, []) or []
 
     meta = _read_json_safe(os.path.join(results_dir, "env.json"), {})
+    # Prefer a stable run timestamp produced during metrics recording
+    ts = meta.get("ts") or meta.get("run_ts") or int(time.time() * 1000)
     gpu_txt_path = os.path.join(results_dir, "gpu.txt")
     gpu = ""
     if os.path.exists(gpu_txt_path):

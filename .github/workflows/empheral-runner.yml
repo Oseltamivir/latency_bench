@@ -226,6 +226,18 @@ jobs:
             --hist-path docs/data/latency_history.json \
             --gsm-path  docs/data/gsm8k_history.json
 
+          # Copy GPU time series to Pages with stable run timestamp name
+          TS=$(jq -r '.ts // .run_ts // empty' results/env.json 2>/dev/null || true)
+          if [ -z "$TS" ]; then
+            # Fallback: use the latest ts in latency history or current time
+            TS=$(jq -r 'map(.ts) | max // empty' docs/data/latency_history.json 2>/dev/null || true)
+            if [ -z "$TS" ]; then TS=$(date +%s%3N); fi
+          fi
+          if [ -f results/metrics/gpu_timeseries.csv ]; then
+            mkdir -p docs/data/gpu_metrics
+            cp results/metrics/gpu_timeseries.csv "docs/data/gpu_metrics/${TS}.csv"
+          fi
+
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/data
