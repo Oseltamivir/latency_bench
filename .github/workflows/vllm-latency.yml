@@ -1,8 +1,6 @@
 name: vLLM Latency #!TODO
 
 on:
-  schedule:
-    - cron: "0 0 * * 0"  # Weekly placeholder (UTC)
   workflow_dispatch:
     inputs:
       model_id:
